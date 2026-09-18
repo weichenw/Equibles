@@ -52,19 +52,17 @@ public static class ServiceCollectionExtensions
         // worker): the website disclosure mandated in the stocks' own stored filings.
         services.AddScoped<IWebsiteSource, FilingsWebsiteSource>();
 
+        // Insider + congressional tracking only: keep the filing scraper (company
+        // sync + Form 3/4 insider filings), document processor, FTD, insider
+        // reprocess, and the Form 144 filer-CIK backfill. Removed heavy
+        // sub-scrapers: AsFiledHtml backfill, FilingItems backfill, document
+        // normalization backfill, NPORT reprocess/realtime, Form ADV, FundSeries
+        // refresh.
         services.AddHostedService<SecScraperWorker>();
         services.AddHostedService<DocumentProcessorWorker>();
         services.AddHostedService<FtdScraperWorker>();
-        services.AddHostedService<FormAdvScraperWorker>();
-        services.AddHostedService<AsFiledHtmlBackfillWorker>();
-        services.AddHostedService<DocumentNormalizationBackfillWorker>();
-        services.AddHostedService<FilingItemsBackfillWorker>();
         services.AddHostedService<InsiderFilingReprocessWorker>();
         services.AddHostedService<Form144FilerCikBackfillWorker>();
-        services.AddHostedService<NportFilingReprocessWorker>();
-        services.AddHostedService<NportRealtimeWorker>();
-        services.AddHostedService<FundSeriesRefreshWorker>();
-        services.AddHostedService<EsefReportScraperWorker>();
 
         return services;
     }

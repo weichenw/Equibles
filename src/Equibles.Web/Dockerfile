@@ -30,6 +30,6 @@ COPY --from=build /app/publish .
 # take several minutes. Probe failures during start-period don't count against
 # the container, so a long window can't slow a fast start — it only prevents a
 # still-migrating upgrade from being marked unhealthy (which aborts worker/mcp).
-HEALTHCHECK --interval=5s --timeout=3s --retries=10 --start-period=10m \
+HEALTHCHECK --interval=5s --timeout=3s --retries=10 --start-period=90m \
     CMD curl --fail http://localhost:8080/healthz || exit 1
 ENTRYPOINT ["dotnet", "Equibles.Web.dll"]

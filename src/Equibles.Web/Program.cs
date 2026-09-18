@@ -169,11 +169,14 @@ public partial class Program
 
     public static async Task ApplyMigrationsAsync(WebApplication app)
     {
-        // Extended timeout for index rebuilds.
+        // The physical owner backfill commits per batch but is a single DbCommand
+        // that runs the whole table (FinancialFact took ≈ 65+ min). The timeout is
+        // wall-clock, so it must exceed the longest command or the migration dies
+        // mid-backfill at exactly the timeout mark.
         using var scope = app.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<EquiblesFinancialDbContext>();
         var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
-        dbContext.Database.SetCommandTimeout(TimeSpan.FromHours(1));
+        dbContext.Database.SetCommandTimeout(TimeSpan.FromHours(6));
 
         // ParadeDB's init script briefly accepts connections on the Unix
         // socket while the TCP listener is still down, which can release us
@@ -220,6 +223,10 @@ public partial class Program
         {
             // TCP refused / unreachable while ParadeDB is restarting.
             NpgsqlException { InnerException: SocketException } => true,
+            // Mac sleep / VM suspend freezes the socket mid-read; the resumed
+            // connection times out instead of erroring cleanly. Without this,
+            // a long suspend during a multi-hour backfill kills the app.
+            NpgsqlException { InnerException: TimeoutException } => true,
             // "cannot_connect_now" — server is in startup.
             PostgresException { SqlState: "57P03" } => true,
             _ => false,

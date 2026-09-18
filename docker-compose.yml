@@ -9,6 +9,7 @@ x-embedding-environment: &embedding-environment
 services:
   db:
     image: paradedb/paradedb:latest
+    restart: unless-stopped
     ports:
       - "5432:5432"
     environment:
@@ -32,6 +33,7 @@ services:
     build:
       context: .
       dockerfile: src/Equibles.Mcp.Server/Dockerfile
+    restart: unless-stopped
     ports:
       - "8081:8080"
     environment:
@@ -48,6 +50,7 @@ services:
     build:
       context: .
       dockerfile: src/Equibles.Web/Dockerfile
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
@@ -79,6 +82,7 @@ services:
     build:
       context: .
       dockerfile: src/Equibles.Worker.Host/Dockerfile
+    restart: unless-stopped
     env_file:
       - path: .env
         required: false

@@ -9,15 +9,14 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddSecFinancialFactsWorker(this IServiceCollection services)
     {
+        // Service registrations only — the ISharesOutstandingProvider (BusinessLogic)
+        // and XBRL parsers are consumed by the Yahoo price importer and the SEC
+        // filing pipeline. Keep the AutoWire calls; the heavy hosted scrapers
+        // (FinancialFactsScraper, ConceptMetadata, XbrlFactsExtraction,
+        // ReportedStatementsCapture/Parse) are disabled for insider +
+        // congressional tracking and not registered here.
         services.AutoWireServicesFrom<FinancialFactsImportService>();
-        // The XBRL parsers live in the BusinessLogic assembly; wire them so the
-        // dimensional-fact extraction sweep can resolve them.
         services.AutoWireServicesFrom<InlineXbrlParser>();
-        services.AddHostedService<FinancialFactsScraperWorker>();
-        services.AddHostedService<ConceptMetadataWorker>();
-        services.AddHostedService<XbrlFactsExtractionWorker>();
-        services.AddHostedService<ReportedStatementsCaptureWorker>();
-        services.AddHostedService<ReportedStatementsParseWorker>();
         return services;
     }
 }

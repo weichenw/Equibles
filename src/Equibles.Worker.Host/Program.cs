@@ -172,26 +172,30 @@ builder.Services.AutoWireServicesFrom<Equibles.Media.BusinessLogic.FileManager>(
 builder.Services.AutoWireServicesFrom<Equibles.Sec.BusinessLogic.SecDocumentHtmlNormalizer>();
 builder.Services.AutoWireServicesFrom<Equibles.InsiderTrading.BusinessLogic.InsiderTransactionPriceValidator>();
 
-// Register worker services and all scrapers
+// Register worker services. Heavy disk-filling scrapers not needed for
+// insider + congressional trade tracking have been removed: financial-facts
+// XBRL scrapers, 13F/13D institutional holdings, filing full-text/media, FDA
+// catalysts, and government contracts. FinancialFacts service registrations
+// (incl. ISharesOutstandingProvider for the Yahoo price importer) are kept via
+// AddSecFinancialFactsWorker, which no longer starts any hosted scraper.
+// Re-add hosted scrapers from git history if needed.
 builder.Services.AddWorkerServices();
 builder.Services.AddSecWorker();
 builder.Services.AddSecFinancialFactsWorker();
+// Holdings reconciliation services only (no hosted scrapers): registers
+// HoldingsImportService and HoldingsRescanSignal, which the auto-discovered
+// StockCusipChangedConsumer needs. The 13F/13D scrapers themselves stay
+// disabled — the rescan signal fires harmlessly into no listener.
+builder.Services.AddHoldingsReconciliation();
 builder.Services.AddFinraWorker();
 builder.Services.AddFredWorker();
 builder.Services.AddYahooWorker();
 builder.Services.AddCftcWorker();
 builder.Services.AddCboeWorker();
 builder.Services.AddCongressWorker();
-builder.Services.AddHoldingsWorker();
-builder.Services.AddMediaWorker();
 builder.Services.AddCommonStocksWorker();
 builder.Services.AddEquityMarketsWorker();
 builder.Services.AddDelayedTradesWorker();
-
-// Reads the stealth browser registered by AddCommonStocksWorker above to render the
-// client-side FDA.gov advisory-committee calendar.
-builder.Services.AddFdaCatalystWorker();
-builder.Services.AddGovernmentContractsWorker();
 
 var host = builder.Build();
 host.Run();

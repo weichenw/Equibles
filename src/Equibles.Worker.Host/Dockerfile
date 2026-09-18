@@ -16,7 +16,11 @@ RUN dotnet exec \
     /app/publish/Microsoft.Playwright.dll install firefox
 
 FROM base AS final
-# Install runtime dependencies: Kerberos + Playwright Firefox system libraries
+# Install runtime dependencies: Kerberos + Playwright Firefox system libraries.
+# Base (aspnet:10.0) is Ubuntu 24.04 noble. Plain Debian names resolve here;
+# only alsa was renamed in the t64 transition. Do NOT use 'pkg1 | pkg2'
+# alternatives — apt on noble treats the whole quoted string as one literal
+# package name and fails with "Unable to locate package".
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgssapi-krb5-2 \
     # Playwright Firefox runtime dependencies
