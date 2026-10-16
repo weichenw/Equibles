@@ -113,6 +113,9 @@ public partial class Program
         // Holdings tools resolve StockCombinedQuarterService to present the in-progress 13F
         // quarter as the combined view.
         builder.Services.AutoWireServicesFrom<Equibles.Holdings.BusinessLogic.StockCombinedQuarterService>();
+        // ShortDataTools requires the squeeze score manager; without this line its
+        // tools (GetShortSqueezeScores, GetLargestShortVolume, ...) fail to activate.
+        builder.Services.AutoWireServicesFrom<Equibles.Finra.BusinessLogic.ShortSqueezeScoreManager>();
 
         // Required for RAG search to embed the query at request time; without this
         // bind EmbeddingConfig is default (Enabled=false) and semantic search is inert.
