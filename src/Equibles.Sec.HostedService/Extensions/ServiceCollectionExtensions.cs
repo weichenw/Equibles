@@ -43,6 +43,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<XbrlEnvelopeCaptureService>();
         services.AddScoped<AsFiledHtmlCaptureService>();
         services.AddScoped<AsFiledHtmlBackfillService>();
+        services.AddScoped<XbrlDocumentSetRecaptureService>();
         services.AddScoped<DocumentNormalizationBackfillService>();
         services.AddScoped<DocumentImageService>();
         services.AddScoped<FilingItemsBackfillService>();
@@ -56,8 +57,8 @@ public static class ServiceCollectionExtensions
         // sync + Form 3/4 insider filings), document processor, FTD, insider
         // reprocess, and the Form 144 filer-CIK backfill. Removed heavy
         // sub-scrapers: AsFiledHtml backfill, FilingItems backfill, document
-        // normalization backfill, NPORT reprocess/realtime, Form ADV, FundSeries
-        // refresh.
+        // normalization backfill, Xbrl document-set recapture, NPORT
+        // reprocess/realtime, Form ADV, FundSeries refresh.
         services.AddHostedService<SecScraperWorker>();
         services.AddHostedService<DocumentProcessorWorker>();
         services.AddHostedService<FtdScraperWorker>();

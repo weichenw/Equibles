@@ -52,9 +52,9 @@ One section per module. Each tool name is exactly what the MCP client sees; the 
 
 `RagSearchTools` (BM25 lexical ranking is always available; embeddings add semantic ranking; exact mode does literal matching):
 
-- `SearchDocuments` — hybrid BM25 and semantic search across indexed SEC documents, optionally scoped by `ticker`; without embeddings it retains ranked BM25 results.
+- `SearchDocuments` — hybrid BM25 and semantic search across indexed SEC documents, optionally scoped by `ticker` (a bare ticker is the US listing; `MIC:TICKER`, such as `XPAR:AIR`, reads that listing's issuer); without embeddings it retains ranked BM25 results. `match: phrase` returns only excerpts containing the exact phrase.
 - `SearchDocument` — semantic or exact literal search inside a specific document.
-- `ListFilings` — list stored filings newest first, market-wide or for one company, with date, document-type, and exact 8-K item-number filters.
+- `ListFilings` — list stored filings newest first, market-wide or for one company (a bare ticker or `MIC:TICKER`, whose list includes its ESEF reports), with date, document-type, and exact 8-K item-number filters.
 
 `FailToDeliverTools`:
 
@@ -66,7 +66,7 @@ One section per module. Each tool name is exactly what the MCP client sees; the 
 
 `NportTools`:
 
-- `GetFundsHoldingStock` — reverse lookup: the registered funds and ETFs holding a given stock, matched by CUSIP against each fund series' most recent NPORT-P report (so an exited position never shows as current). Returns registrant and series, reporting period, position size, USD value, share of the fund's net assets, and payoff profile (Long/Short), largest positions first.
+- `GetFundsHoldingStock` — reverse lookup: the registered funds and ETFs holding a given stock, matched by CUSIP, or by ISIN for a listing outside the US (`MIC:TICKER`), against each fund series' most recent NPORT-P report (so an exited position never shows as current). Returns registrant and series, reporting period, position size, USD value, share of the fund's net assets, and payoff profile (Long/Short), largest positions first.
 
 `FundDirectoryTools`:
 
@@ -91,7 +91,7 @@ One section per module. Each tool name is exactly what the MCP client sees; the 
 
 `FinancialStatementTools`:
 
-- `GetFinancialStatement` — full income statement / balance sheet / cash flow for a ticker + fiscal period, anchored to one actual period end. Quarterly USD flows are discrete quarters; a missing quarter is derived only by exact subtraction of compatible cumulative facts and marked in the `Basis` column.
+- `GetFinancialStatement` — full income statement / balance sheet / cash flow for a ticker + fiscal period, anchored to one actual period end. Quarterly currency flows are discrete quarters; a missing quarter is derived only by exact subtraction of compatible cumulative facts and marked in the `Basis` column.
 
 `RevenueBreakdownTools`:
 
@@ -125,7 +125,7 @@ never substitutes `BRK-B`; dot share-class spelling such as `BRK.A` resolves to 
 
 - `GetStockPrices` — daily OHLCV + `AdjustedClose` for a ticker over a date range.
 - `GetLatestClosingPrices` — latest close for one or more tickers.
-- `GetDividendHistory` — declared cash-dividend history by ex-date for a company's current primary ticker.
+- `GetDividendHistory` — declared cash-dividend history by ex-date for an exact stock or ETF listing; share classes and fund series of one filer never share payments.
 - `GetStochasticOscillator` — Stochastic Oscillator (%K and %D) for a ticker over a date range.
 - `GetAverageTrueRange` — Wilder's Average True Range (ATR) volatility measure for a ticker over a date range.
 - `GetOnBalanceVolume` — On-Balance Volume (OBV) cumulative-flow indicator for a ticker over a date range.

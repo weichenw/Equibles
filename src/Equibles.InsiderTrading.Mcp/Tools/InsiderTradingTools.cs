@@ -115,7 +115,8 @@ public class InsiderTradingTools
         return _runner.Execute(
             async () =>
             {
-                var (stock, stockError) = await _commonStockRepository.ResolveByTicker(ticker);
+                var (stock, stockError) =
+                    await _commonStockRepository.ResolveByTickerIncludingDelisted(ticker);
                 if (stockError != null)
                     return stockError;
 
@@ -208,7 +209,7 @@ public class InsiderTradingTools
                 var splits = await _stockSplitRepository
                     .GetEffectiveByStock(stock.Id, DateOnly.FromDateTime(DateTime.UtcNow))
                     .ToListAsync();
-                splits = PriceSeriesSplitScope.ForListing(
+                splits = ShareCountSplitScope.ForListedSeries(
                     splits,
                     stock.Presentation.Listing.Ticker,
                     stock.Presentation.Listing.Ticker
@@ -307,7 +308,8 @@ public class InsiderTradingTools
         return _runner.Execute(
             async () =>
             {
-                var (stock, stockError) = await _commonStockRepository.ResolveByTicker(ticker);
+                var (stock, stockError) =
+                    await _commonStockRepository.ResolveByTickerIncludingDelisted(ticker);
                 if (stockError != null)
                     return stockError;
 
@@ -359,7 +361,7 @@ public class InsiderTradingTools
                 var splits = await _stockSplitRepository
                     .GetEffectiveByStock(stock.Id, DateOnly.FromDateTime(DateTime.UtcNow))
                     .ToListAsync();
-                splits = PriceSeriesSplitScope.ForListing(
+                splits = ShareCountSplitScope.ForListedSeries(
                     splits,
                     stock.Presentation.Listing.Ticker,
                     stock.Presentation.Listing.Ticker
@@ -502,7 +504,8 @@ public class InsiderTradingTools
         return _runner.Execute(
             async () =>
             {
-                var (stock, stockError) = await _commonStockRepository.ResolveByTicker(ticker);
+                var (stock, stockError) =
+                    await _commonStockRepository.ResolveByTickerIncludingDelisted(ticker);
                 if (stockError != null)
                     return stockError;
 
@@ -562,7 +565,7 @@ public class InsiderTradingTools
                     .GetEffectiveByStock(stock.Id, DateOnly.FromDateTime(DateTime.UtcNow))
                     .ToListAsync();
                 var allSplits = splits;
-                splits = PriceSeriesSplitScope.ForListing(
+                splits = ShareCountSplitScope.ForListedSeries(
                     allSplits,
                     stock.Presentation.Listing.Ticker,
                     stock.Presentation.Listing.Ticker

@@ -9,9 +9,9 @@
 [![Self-Hosted](https://img.shields.io/badge/Self--Hosted-Ready-success?logo=serverless&logoColor=white)](docker-compose.yml)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-8A2BE2?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0xMiAyQzYuNDggMiAyIDYuNDggMiAxMnM0LjQ4IDEwIDEwIDEwIDEwLTQuNDggMTAtMTBTMTcuNTIgMiAxMiAyem0wIDE4Yy00LjQyIDAtOC0zLjU4LTgtOHMzLjU4LTggOC04IDggMy41OCA4IDgtMy41OCA4LTggOHoiLz48L3N2Zz4=)](https://modelcontextprotocol.io)
 
-**Equibles is a self-hosted, open-source financial data MCP server** — an open-source alternative to a Bloomberg Terminal, built for AI agents rather than humans. It scrapes, stores, and serves SEC filings and XBRL financials, 13F institutional holdings, insider and congressional trades, FINRA/SEC short data, FRED economic indicators, CFTC and CBOE positioning, fund filings, government contracts, and daily stock prices — and exposes all of it over the Model Context Protocol, so Claude, ChatGPT, Cursor, or any agent can query it directly. Runs on your own hardware with Docker, for free, forever.
+**Equibles is a self-hosted, open-source financial data MCP server** — an open-source alternative to a Bloomberg Terminal, built for AI agents rather than humans. It scrapes, stores, and serves SEC filings and XBRL financials, 13F institutional holdings, insider and congressional trades, FINRA/SEC short data, FRED economic indicators, CFTC and CBOE positioning, fund filings, government contracts, and daily stock prices, and exposes them over the Model Context Protocol, so Claude, ChatGPT, Cursor, or any agent can query them directly. Its stock universe covers US listings plus verified listings on the major European exchanges. Runs on your own hardware with Docker, for free, forever.
 
-**This is the open-source core of [Equibles](https://equibles.com).** [Equibles Cloud](https://equibles.com/mcp) runs this exact core and adds more tools on top — earnings call transcripts and audio, real-time quotes, options chains with Greeks, LLM-extracted KPIs and guidance, buybacks, IPO filings, executive changes, valuation multiples, index composition, portfolio tracking, and a full US-market screener. Same protocol, same tool names, nothing to run — see [what's included](#whats-included).
+**This is the open-source core of [Equibles](https://equibles.com).** [Equibles Cloud](https://equibles.com/mcp) runs this exact core and adds more tools on top: earnings call transcripts and audio, real-time quotes, options chains with Greeks, LLM-extracted KPIs and guidance, buybacks, IPO filings, executive changes, valuation multiples, index composition, portfolio tracking, and a US-market screener. It also lists Chinese and Hong Kong shares beside the European ones. Same protocol, same tool names, nothing to run — see [what's included](#whats-included).
 
 > **Don't want to run anything?** Point your AI assistant at `https://mcp.equibles.com/mcp` and get a free API key at [equibles.com/mcp](https://equibles.com/mcp) — 100 requests/day, no card. Per-client setup guides live at [daniel3303/stock-market-mcp-server](https://github.com/daniel3303/stock-market-mcp-server).
 
@@ -23,7 +23,7 @@ Everything marked **Self-hosted** is scraped, stored, and served by this repo �
 
 | Domain | Data Source | Self-hosted | [Equibles Cloud](https://equibles.com) | Description |
 |--------|------------|:---:|:---:|-------------|
-| **SEC Filings** | SEC EDGAR | ✅ | ✅ | 10-K, 10-Q, 8-K annual/quarterly/current reports with full-text search |
+| **SEC Filings** | SEC EDGAR | ✅ | ✅ | Annual, quarterly and current reports (10-K, 10-Q, 8-K, 20-F, 6-K, 40-F), proxies (DEF 14A, DEFA14A, PRE 14A), registration statements (S-1, S-3, S-3ASR, S-4, F-1, F-3, F-3ASR, F-4), tender offers (SC TO, SC 14D9) and late-filing notices (NT 10-K, NT 10-Q, NT 20-F), with full-text search |
 | **Financial Statements** | SEC XBRL | ✅ | ✅ | Parsed income statement, balance sheet, and cash flow facts per fiscal period |
 | **Holdings** | SEC 13F-HR | ✅ | ✅ | Institutional ownership — who owns what, how much, and trend over time |
 | **Fund Filings** | SEC NPORT / N-CEN / Form D | ✅ | ✅ | Fund portfolio holdings, registered-fund operations (service providers), and exempt offerings (private placements) |
@@ -33,7 +33,7 @@ Everything marked **Self-hosted** is scraped, stored, and served by this repo �
 | **Short Data** | SEC / FINRA | ✅ | ✅ | Fails-to-deliver (SEC), daily short volume and short interest (FINRA) |
 | **Economic Indicators** | FRED (Federal Reserve) | ✅ | ✅ | Interest rates, inflation, employment, GDP, yield spreads, and more |
 | **Stock Prices** | Yahoo Finance | ✅ | ✅ | Daily OHLCV prices with technical indicators (SMA, RSI, MACD) |
-| **European Listings** | ESMA/FCA FIRDS + exchange directories | ✅ | ✅ | Verified share listings on Euronext (Paris, Amsterdam, Brussels, Dublin, Oslo, Milan, Lisbon), Xetra, Nasdaq Stockholm, Helsinki and Copenhagen (main market and First North), BME and GPW, keyed by ISIN and venue, with daily prices in the listing's own currency; every market with a directory adapter runs automatically; no MCP tools yet (see `docs/equity-identity.md`) |
+| **European Listings** | ESMA/FCA FIRDS + exchange directories | ✅ | ✅ | Verified share listings on Euronext (Paris, Amsterdam, Brussels, Dublin, Oslo, Milan, Lisbon), Xetra, Nasdaq Stockholm, Helsinki and Copenhagen (main market and First North), BME, GPW and the London Stock Exchange (main market and AIM), keyed by ISIN and venue, with daily prices in the listing's own currency; every market with a directory adapter runs automatically; the price, dividend, financial-statement and fund-holding MCP tools accept them as `MIC:TICKER` (`XPAR:AIR`; see `docs/equity-identity.md`) |
 | **Futures Positioning** | CFTC | ✅ | ✅ | Commitments of Traders (COT) data for 30+ futures contracts |
 | **Market Indicators** | CBOE | ✅ | ✅ | VIX volatility index (1990+) and put/call ratios by category |
 | **Government Contracts** | USAspending.gov | ✅ | ✅ | Federal contract awards to public companies — amounts, awarding agencies, dates, and NAICS/PSC codes |
@@ -50,7 +50,7 @@ Everything marked **Self-hosted** is scraped, stored, and served by this repo �
 | **Investor Relations** | Company IR sites | — | ✅ | Upcoming events, conference appearances, and IR newsroom releases |
 | **Executives** | SEC 8-K / DEF 14A | — | ✅ | Appointments and departures, plus Summary Compensation Table figures |
 | **Valuation Multiples** | Derived | — | ✅ | Current and historical P/E, P/S, P/B, EV/EBIT, EV/EBITDA and more, with the periods each was computed from |
-| **Screener** | Derived | — | ✅ | Filter the whole US market on valuation, margins, growth, ownership, short data, and dividends |
+| **Screener** | Derived | — | ✅ | Filter every US listing on valuation, margins, growth, ownership, short data, and dividends, and browse European, Chinese and Hong Kong listings by market |
 | **Smart Money** | Derived | — | ✅ | Insider sentiment scores, super-investor portfolios, and market-wide congressional activity |
 | **Risk Flags** | SEC filings | — | ✅ | Going-concern language and customer-concentration disclosures |
 | **Market Context** | Derived | — | ✅ | Correlated stocks, plus market calendar and open/closed status |
@@ -331,6 +331,17 @@ In OpenClaw, add an MCP server with the URL `http://localhost:8081/mcp` (HTTP tr
 
 Any MCP-compatible client can connect to `http://localhost:8081/mcp` (HTTP transport).
 
+### Running over stdio
+
+Clients that launch a server as a subprocess can run it over stdin/stdout instead of HTTP:
+
+```bash
+dotnet build src/Equibles.Mcp.Server
+dotnet run --no-build --project src/Equibles.Mcp.Server -- --stdio
+```
+
+Build first: a plain `dotnet run` restores and prints build output on stdout, which corrupts the protocol stream. The server reads `ConnectionStrings:DefaultConnection` as usual, so point it at the same database the worker fills. Logs go to stderr. The API key and the per-request output-format header and query parameter do not apply; set `EQUIBLES_OUTPUT_FORMAT=gcf` in the subprocess environment instead.
+
 ## Tools
 
 This self-hosted build exposes 62 tools over MCP. The hosted server at `https://mcp.equibles.com/mcp` runs this same core and [adds more on top](#whats-included). Full catalog and client setup: [daniel3303/stock-market-mcp-server](https://github.com/daniel3303/stock-market-mcp-server).
@@ -378,7 +389,7 @@ This self-hosted build exposes 62 tools over MCP. The hosted server at `https://
 
 **Fundamentals (XBRL)**
 
-- GetFinancialStatement — income/balance/cash-flow statement anchored to one period end; quarterly USD flows are reported discrete quarters or exact derived remainders, never YTD totals
+- GetFinancialStatement — income/balance/cash-flow statement anchored to one period end; quarterly currency flows are reported discrete quarters or exact derived remainders, never YTD totals
 - GetFinancialFact — one concept over time with exact spans and stale-alias coverage warnings
 - CompareFinancialFact — a concept across companies
 - GetRevenueBreakdown — revenue by segment/geography/product plus reported segment operating income and derived margin
@@ -425,7 +436,7 @@ This self-hosted build exposes 62 tools over MCP. The hosted server at `https://
 
 - GetStockPrices — daily OHLCV plus the stored auxiliary adjusted close when it differs
 - GetLatestClosingPrices — latest close/change/volume
-- GetDividendHistory — stored declared cash dividends for a company's primary ticker
+- GetDividendHistory — stored declared cash dividends for an exact stock or ETF listing
 - GetStochasticOscillator — stochastic oscillator (%K/%D)
 - GetAverageTrueRange — average true range (ATR)
 - GetOnBalanceVolume — on-balance volume (OBV)

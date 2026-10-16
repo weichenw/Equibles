@@ -8,9 +8,9 @@ using Microsoft.EntityFrameworkCore;
 namespace Equibles.Holdings.HostedService;
 
 /// <summary>
-/// Periodically (re)computes the fund score for filers that have holdings on file, so the
-/// institutions leaderboard can rank the universe by alpha vs the benchmark. Scoring is
-/// incremental: a filer is re-scored when holdings data was imported after its last score,
+/// Periodically (re)computes the fund score for filers with a filing rollup or an existing
+/// score, so the institutions leaderboard can rank the universe by alpha vs the benchmark.
+/// Scoring is incremental: a filer is re-scored when a filing was imported after its last score,
 /// when its score is older than <see cref="MaxScoreAge"/>, or when it has no score at all
 /// (which also keeps visiting Schedule 13D/G-only filers — scoring them yields nothing, which
 /// prunes any stale score they may have accumulated, and their backtest short-circuits before
@@ -99,6 +99,20 @@ public class FundScoringWorker : BackgroundService
     internal async Task<int> ScoreAllHolders(CancellationToken cancellationToken)
     {
         var asOf = DateOnly.FromDateTime(DateTime.UtcNow);
+        // Without the benchmark no filer can score, and stamping every visit would hold the whole
+        // universe for MaxScoreAge after it heals, so the cycle visits nobody instead.
+        await using (var scope = _scopeFactory.CreateAsyncScope())
+        {
+            var manager = scope.ServiceProvider.GetRequiredService<FundScoringManager>();
+            if (!await manager.CanScoreAgainst(asOf, WindowYears, BenchmarkTicker))
+            {
+                _logger.LogWarning(
+                    "Fund scoring cycle skipped: benchmark {Benchmark} has no issuer or no prices in the window",
+                    BenchmarkTicker
+                );
+                return 0;
+            }
+        }
         var pending = await SelectHoldersNeedingScore(cancellationToken);
 
         var scored = 0;
@@ -111,34 +125,30 @@ public class FundScoringWorker : BackgroundService
         return scored;
     }
 
-    // The incremental selection: one grouped pass over the holdings table yields the filer
-    // universe together with two change signals per filer, and one small read yields the
-    // existing scores' last-computed times. A filer is due when it has no score for this
-    // (window, benchmark), its data changed after the score, or the score has aged past
-    // MaxScoreAge. Two signals because neither alone sees every change: row CreationTime
-    // catches new inserts (new quarters, late backfills of old filings) but not in-place
-    // amendment restatements — the importer's upsert rewrites values without touching
-    // CreationTime — while the latest FilingDate catches those restatements (it IS rewritten
-    // on match) but not backfills of old-dated filings. FundScore.CreationTime is refreshed
-    // on every upsert, so it is the "last scored at" marker; a transiently unscoreable filer
-    // keeps its old timestamps and is retried by the staleness floor.
-    private async Task<List<Guid>> SelectHoldersNeedingScore(CancellationToken cancellationToken)
+    // A filer is due when it has no score for this (window, benchmark), its data changed after
+    // FundScore.CreationTime (the last-scored marker), or the score aged past MaxScoreAge.
+    // Both change signals come from the per-accession InstitutionalFiling rollups (CreationTime
+    // for new accessions, the latest FilingDate for in-place amendments), which SyncFilingSummaries
+    // writes after a data set's positions, so a filer whose positions lead its rollup is scored
+    // once the rollup lands.
+    internal async Task<List<Guid>> SelectHoldersNeedingScore(CancellationToken cancellationToken)
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<EquiblesFinancialDbContext>();
 
         var holders = await dbContext
-            .Set<InstitutionalHolding>()
-            .GroupBy(h => h.InstitutionalHolderId)
+            .Set<InstitutionalFiling>()
+            .GroupBy(f => f.InstitutionalHolderId)
             .Select(g => new
             {
                 HolderId = g.Key,
-                LastImported = g.Max(h => h.CreationTime),
-                LastFiled = g.Max(h => h.FilingDate),
+                LastImported = g.Max(f => f.CreationTime),
+                LastFiled = g.Max(f => f.FilingDate),
             })
             .ToListAsync(cancellationToken);
 
-        var benchmark = TickerNormalizer.Normalize(BenchmarkTicker);
+        // The stored key is the manager's dash-listed form, so both stamps must be read with it.
+        var benchmark = TickerNormalizer.NormalizeDashListed(BenchmarkTicker);
         if (benchmark == null)
             throw new InvalidOperationException(
                 "The configured fund-scoring benchmark is invalid."
@@ -154,27 +164,64 @@ public class FundScoringWorker : BackgroundService
                 s.CalculationVersion,
             })
             .ToDictionaryAsync(s => s.InstitutionalHolderId, cancellationToken);
+        var attempts = await dbContext
+            .Set<FundScoreAttempt>()
+            .Where(a => a.WindowYears == WindowYears && a.BenchmarkTicker == benchmark)
+            .Select(a => new
+            {
+                a.InstitutionalHolderId,
+                a.AttemptedAt,
+                a.CalculationVersion,
+            })
+            .ToDictionaryAsync(a => a.InstitutionalHolderId, cancellationToken);
+
+        // A joint filing's shared accession rolls up under one holder only, so a scored co-filer
+        // with no rollup of its own is still revisited on the staleness floor and refreshed or pruned.
+        var discovered = holders.Select(h => h.HolderId).ToHashSet();
+        var candidates = holders
+            .Select(h => (h.HolderId, h.LastImported, h.LastFiled))
+            .Concat(
+                scoreStates
+                    .Keys.Where(id => !discovered.Contains(id))
+                    .Select(id =>
+                        (
+                            HolderId: id,
+                            LastImported: DateTime.MinValue,
+                            LastFiled: DateOnly.MinValue
+                        )
+                    )
+            )
+            .ToList();
 
         var staleBefore = DateTime.UtcNow - MaxScoreAge;
-        var pending = holders
-            .Where(h =>
+        var pending = candidates
+            .Select(h =>
             {
                 scoreStates.TryGetValue(h.HolderId, out var scoreState);
-                return IsScoreDue(
-                    scoreState?.CreationTime,
-                    scoreState?.CalculationVersion,
-                    h.LastImported,
-                    h.LastFiled,
-                    staleBefore
+                attempts.TryGetValue(h.HolderId, out var attempt);
+                // An unscored filer's last visit stands in for the score it has none of, so an
+                // unscoreable filer waits the staleness floor instead of being re-read every cycle.
+                var lastScored = scoreState?.CreationTime ?? attempt?.AttemptedAt;
+                var version = scoreState?.CalculationVersion ?? attempt?.CalculationVersion;
+                return (
+                    h.HolderId,
+                    // Every visit refreshes the attempt stamp, so a scored filer whose backtest
+                    // keeps refusing does not sit at the head under its old score.
+                    LastVisit: attempt?.AttemptedAt ?? scoreState?.CreationTime,
+                    Due: IsScoreDue(lastScored, version, h.LastImported, h.LastFiled, staleBefore)
                 );
             })
+            .Where(h => h.Due)
+            // Never-visited filers first, then the longest unvisited, so a cycle a restart cuts
+            // short resumes where the previous one stopped instead of re-reading its head.
+            .OrderBy(h => h.LastVisit ?? DateTime.MinValue)
             .Select(h => h.HolderId)
             .ToList();
 
         _logger.LogInformation(
             "Fund scoring cycle: {Pending} of {Total} filer(s) due (new data, stale, or unscored)",
             pending.Count,
-            holders.Count
+            candidates.Count
         );
         return pending;
     }
@@ -216,6 +263,7 @@ public class FundScoringWorker : BackgroundService
                 return false;
 
             var score = await manager.ScoreHolder(holder, asOf, WindowYears, BenchmarkTicker);
+            await RecordAttempt(scope.ServiceProvider, holderId, cancellationToken);
             return score != null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -227,5 +275,39 @@ public class FundScoringWorker : BackgroundService
             _logger.LogWarning(ex, "Failed to score filer {HolderId}; skipping", holderId);
             return false;
         }
+    }
+
+    // Stamped after every visit, scored or not; a visit that faulted is left unstamped so the
+    // next cycle retries it.
+    private async Task RecordAttempt(
+        IServiceProvider services,
+        Guid holderId,
+        CancellationToken cancellationToken
+    )
+    {
+        var dbContext = services.GetRequiredService<EquiblesFinancialDbContext>();
+        var benchmark = TickerNormalizer.NormalizeDashListed(BenchmarkTicker);
+        var attempt = await dbContext
+            .Set<FundScoreAttempt>()
+            .SingleOrDefaultAsync(
+                a =>
+                    a.InstitutionalHolderId == holderId
+                    && a.WindowYears == WindowYears
+                    && a.BenchmarkTicker == benchmark,
+                cancellationToken
+            );
+        if (attempt == null)
+        {
+            attempt = new FundScoreAttempt
+            {
+                InstitutionalHolderId = holderId,
+                WindowYears = WindowYears,
+                BenchmarkTicker = benchmark,
+            };
+            dbContext.Set<FundScoreAttempt>().Add(attempt);
+        }
+        attempt.AttemptedAt = DateTime.UtcNow;
+        attempt.CalculationVersion = FundScore.CurrentCalculationVersion;
+        await dbContext.SaveChangesAsync(cancellationToken);
     }
 }

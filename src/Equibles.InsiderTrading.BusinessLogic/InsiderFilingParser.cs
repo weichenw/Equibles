@@ -59,6 +59,7 @@ public static class InsiderFilingParser
         // element, so it applies to every row this filing contributes — stamp it
         // on each as they are added.
         var rule10b5One = ParseRule10b5One(root);
+        var ownerRelationship = ParseOwnerRelationship(root);
         var originalFilingDate = isAmendment ? ParseDateOfOriginalSubmission(root) : null;
 
         var sourceOrder = 0;
@@ -78,6 +79,7 @@ public static class InsiderFilingParser
                 return;
             tx.TransactionOrder = order;
             tx.IsRule10b5One = rule10b5One;
+            tx.OwnerRelationship = ownerRelationship;
             tx.OriginalFilingDate = originalFilingDate;
             tx.FilingForm = ParseOwnershipForm(filing.Form);
             transactions.Add(tx);
@@ -212,6 +214,29 @@ public static class InsiderFilingParser
         return element == null ? null : ParseBool(element.Value);
     }
 
+    // Every joint filer holds an interest in the reported trade, so the rows carry the union of
+    // their boxes; null when no reporting owner states a relationship.
+    public static InsiderRelationship? ParseOwnerRelationship(XElement root)
+    {
+        InsiderRelationship? relationship = null;
+        foreach (var owner in root.Elements("reportingOwner"))
+        {
+            var boxes = owner.Element("reportingOwnerRelationship");
+            if (boxes == null)
+                continue;
+            relationship ??= InsiderRelationship.None;
+            if (ParseBool(boxes.Element("isDirector")?.Value))
+                relationship |= InsiderRelationship.Director;
+            if (ParseBool(boxes.Element("isOfficer")?.Value))
+                relationship |= InsiderRelationship.Officer;
+            if (ParseBool(boxes.Element("isTenPercentOwner")?.Value))
+                relationship |= InsiderRelationship.TenPercentOwner;
+            if (ParseBool(boxes.Element("isOther")?.Value))
+                relationship |= InsiderRelationship.Other;
+        }
+        return relationship;
+    }
+
     // The 0-shares row recorded for a noSecuritiesOwned Form 3 — the owner's zero
     // baseline. No security exists to classify, so SecurityKind stays Unknown; the
     // 0 price is valid by design (nothing to validate or repair). Mirrors the row the
@@ -309,6 +334,16 @@ public static class InsiderFilingParser
         if (!IsPlausibleTransactionDate(transactionDate, filing.FilingDate))
             transactionDate = filing.ReportDate;
 
+        // Derivative rows carry the 1:1 evidence the price validator needs to repair a total
+        // typed into the per-unit field; a footnote-only or absent value stays null.
+        var isDerivative = kind == InsiderSecurityKind.Derivative;
+        var underlyingShares = isDerivative
+            ? ParseNullableLong(Wrapped("underlyingSecurity", "underlyingSecurityShares"))
+            : null;
+        var exercisePrice = isDerivative
+            ? ParseNullableDecimal(Wrapped("conversionOrExercisePrice"))
+            : null;
+
         return new InsiderTransaction
         {
             InsiderOwnerId = owner.Id,
@@ -328,6 +363,8 @@ public static class InsiderFilingParser
             SecurityKind = kind,
             ParserVersion = InsiderTransaction.CurrentParserVersion,
             Notes = ExtractNotes(txElement, footnotes),
+            UnderlyingShares = underlyingShares,
+            ExercisePrice = exercisePrice,
         };
     }
 
@@ -514,10 +551,20 @@ public static class InsiderFilingParser
         return d > long.MaxValue || d < long.MinValue ? 0 : (long)d;
     }
 
-    internal static decimal ParseDecimal(string value)
+    // Null when the field is absent, blank, unparseable or out of range, so missing evidence
+    // stays distinct from a filed zero; truncates like ParseLong.
+    internal static long? ParseNullableLong(string value)
     {
-        if (string.IsNullOrEmpty(value))
-            return 0;
+        var parsed = ParseNullableDecimal(value);
+        if (parsed == null || parsed > long.MaxValue || parsed < long.MinValue)
+            return null;
+        return (long)parsed.Value;
+    }
+
+    internal static decimal? ParseNullableDecimal(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
         return decimal.TryParse(
             value,
             System.Globalization.NumberStyles.Any,
@@ -525,6 +572,8 @@ public static class InsiderFilingParser
             out var result
         )
             ? result
-            : 0;
+            : null;
     }
+
+    internal static decimal ParseDecimal(string value) => ParseNullableDecimal(value) ?? 0;
 }

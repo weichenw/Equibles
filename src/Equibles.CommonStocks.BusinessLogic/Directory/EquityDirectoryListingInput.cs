@@ -14,6 +14,9 @@ public class EquityDirectoryListingInput
     public string SourceListingIdentifier { get; set; }
     public string IssuerName { get; set; }
     public List<string> IssuerNameAliases { get; set; } = [];
+
+    // Names this source supplied as IssuerName before; an issuer still carrying one takes IssuerName.
+    public List<string> ReplacedIssuerNames { get; set; } = [];
     public string LegalEntityIdentifier { get; set; }
     public List<string> RelatedIsins { get; set; } = [];
     public string Isin { get; set; }
@@ -22,6 +25,9 @@ public class EquityDirectoryListingInput
     public string Ticker { get; set; }
     public string MarketIdentifierCode { get; set; }
     public string MarketCountryCode { get; set; }
+
+    // The market's extended-session venue codes; a line on one never keeps the presentation from its regular line.
+    public List<string> ExtendedSessionMarketIdentifierCodes { get; set; } = [];
     public string TradingCurrency { get; set; }
     public decimal? QuoteUnitMultiplier { get; set; }
     public string SourceUrl { get; set; }

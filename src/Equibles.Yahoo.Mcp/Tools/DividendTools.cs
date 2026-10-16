@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Equibles.CommonStocks.Data.Helpers;
 using Equibles.CommonStocks.Data.Models;
 using Equibles.CommonStocks.Repositories;
+using Equibles.CommonStocks.Repositories.Extensions;
 using Equibles.CorporateActions.Repositories;
 using Equibles.Errors.BusinessLogic;
 using Equibles.Errors.BusinessLogic.Extensions;
@@ -35,10 +36,13 @@ public class DividendTools
 
     [McpServerTool(Name = "GetDividendHistory", Title = "Dividend History", ReadOnly = true)]
     [Description(
-        "Get a company's stored declared cash dividends newest first. Each row gives the ex-dividend date and cash amount per share in USD. Date filters apply to the ex-dividend date. Future ex-dates can appear after a dividend is declared. Dividend records are issuer-level and available only through the company's current primary ticker; a secondary share class is never assumed to have the same dividend."
+        "Get the stored declared cash dividends of an exact stock or ETF listing, newest first. Each row gives the ex-dividend date and cash amount per share: in USD for a US listing, and in the listing's trading currency for a listing on another exchange (MIC:TICKER). Date filters apply to the ex-dividend date. Future ex-dates can appear after a dividend is declared. Each listing reports its own payments: a share class (BRK-A beside BRK-B) or a fund series sharing its trust's filer (SCHD beside FNDA) never inherits another listing's dividends."
     )]
     public Task<string> GetDividendHistory(
-        [Description("Current primary stock ticker (e.g., AAPL, MSFT).")] string ticker,
+        [Description(
+            "Listed stock or ETF ticker (e.g., AAPL, BRK-A, SCHD); a listing on another exchange is MIC:TICKER (XPAR:AIR)."
+        )]
+            string ticker,
         [Description("Optional earliest ex-dividend date in YYYY-MM-DD format.")]
             DateTime? startDate = null,
         [Description("Optional latest ex-dividend date in YYYY-MM-DD format.")]
@@ -57,23 +61,9 @@ public class DividendTools
                     return $"startDate {McpFormat.Invariant(startDate.Value, "yyyy-MM-dd")} is after endDate {McpFormat.Invariant(endDate.Value, "yyyy-MM-dd")} — swap the values.";
                 }
 
-                var normalizedTicker = TickerNormalizer.NormalizeDashListed(ticker);
-                if (normalizedTicker == null)
-                    return McpToolExecutor.StockNotFound(ticker);
-
-                EquityIssuer stock = await _commonStockRepository.GetUsByTicker(normalizedTicker);
-                if (stock == null)
-                    return McpToolExecutor.StockNotFound(ticker);
-                if (
-                    !string.Equals(
-                        stock.Presentation.Listing.Ticker,
-                        normalizedTicker,
-                        StringComparison.Ordinal
-                    )
-                )
-                {
-                    return $"Dividend history is available only for the current primary ticker {stock.Presentation.Listing.Ticker}; {normalizedTicker} is a separate listing and is not assumed to share its dividends.";
-                }
+                var (listing, label, venue, error) = await ResolveDividendListing(ticker);
+                if (listing == null)
+                    return error;
 
                 var start = startDate.HasValue
                     ? DateOnly.FromDateTime(startDate.Value)
@@ -82,9 +72,10 @@ public class DividendTools
                 maxResults = McpLimit.Clamp(maxResults);
                 offset = McpLimit.ClampOffset(offset);
 
-                var query = _cashDividendRepository
-                    .GetHistoryByListing(stock.Presentation.EquityListingId, start, end)
-                    .Where(dividend => dividend.Currency == "USD");
+                // A venue declares in its own currency; a US listing keeps its USD-only contract.
+                var query = _cashDividendRepository.GetHistoryByListing(listing.Id, start, end);
+                if (!venue)
+                    query = query.Where(dividend => dividend.Currency == "USD");
                 var total = await query.CountAsync();
                 var dividends = await query.Skip(offset).Take(maxResults).ToListAsync();
 
@@ -94,19 +85,21 @@ public class DividendTools
                         return McpOutput.PagedTruncationNote(0, total, offset);
 
                     return start.HasValue || end.HasValue
-                        ? $"No stored cash-dividend records match the ex-date range for {stock.Presentation.Listing.Ticker}."
-                        : $"No cash-dividend records are stored for {stock.Presentation.Listing.Ticker}.";
+                        ? $"No stored cash-dividend records match the ex-date range for {EquityListingSymbol.Display(listing)}."
+                        : $"No cash-dividend records are stored for {EquityListingSymbol.Display(listing)}.";
                 }
 
                 var result = MarkdownTable.Start(
-                    $"Declared cash dividends for {MarkdownTable.EscapeCell(stock.Name)} ({MarkdownTable.EscapeCell(stock.Presentation.Listing.Ticker)}), newest first:",
+                    $"Declared cash dividends for {label}, newest first:",
                     "Ex-Date | Amount Per Share",
                     "--------|-----------------"
                 );
                 result.AppendRows(
                     dividends,
                     dividend =>
-                        $"{McpFormat.Invariant(dividend.ExDate, "yyyy-MM-dd")} | ${McpFormat.Price(dividend.AmountPerShare)}"
+                        venue
+                            ? $"{McpFormat.Invariant(dividend.ExDate, "yyyy-MM-dd")} | {McpFormat.Price(dividend.AmountPerShare)} {dividend.Currency}"
+                            : $"{McpFormat.Invariant(dividend.ExDate, "yyyy-MM-dd")} | ${McpFormat.Price(dividend.AmountPerShare)}"
                 );
 
                 var pagingNote = McpOutput.PagedTruncationNote(dividends.Count, total, offset);
@@ -120,6 +113,57 @@ public class DividendTools
             },
             "GetDividendHistory",
             $"ticker: {ticker}"
+        );
+    }
+
+    // A bare ticker is the exact US listing; MIC:TICKER, or a provider suffix once the US lookup
+    // misses, is one venue listing.
+    private async Task<(
+        EquityListing Listing,
+        string Label,
+        bool Venue,
+        string Error
+    )> ResolveDividendListing(string ticker)
+    {
+        if (!EquityListingSymbol.TryParse(ticker, out _, out _))
+        {
+            var normalizedTicker = TickerNormalizer.NormalizeDashListed(ticker);
+            if (normalizedTicker != null)
+            {
+                EquityIssuer stock = await _commonStockRepository.GetUsByTicker(normalizedTicker);
+                var usListing = SecondaryTickerPolicy.ResolveExactUsListing(
+                    stock,
+                    normalizedTicker
+                );
+                if (usListing != null)
+                {
+                    // The filer's name can describe a different fund series, so only its presentation listing carries it.
+                    var usLabel =
+                        usListing.Id == stock.Presentation?.EquityListingId
+                            ? $"{MarkdownTable.EscapeCell(stock.Name)} ({MarkdownTable.EscapeCell(usListing.Ticker)})"
+                            : MarkdownTable.EscapeCell(usListing.Ticker);
+                    return (usListing, usLabel, false, null);
+                }
+            }
+            if (ticker == null || !ticker.Contains('.'))
+                return (null, null, false, McpToolExecutor.StockNotFound(ticker));
+        }
+
+        var (venueStock, venue, error) = await _commonStockRepository.ResolveListing(ticker);
+        if (venue == null)
+            return (
+                null,
+                null,
+                false,
+                EquityListingSymbol.TryParse(ticker, out _, out _)
+                    ? error
+                    : McpToolExecutor.StockNotFound(ticker)
+            );
+        return (
+            venue,
+            $"{MarkdownTable.EscapeCell(venueStock.Name)} ({MarkdownTable.EscapeCell(EquityListingSymbol.Display(venue))})",
+            true,
+            null
         );
     }
 }

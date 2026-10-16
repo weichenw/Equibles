@@ -1,5 +1,8 @@
 using Equibles.CommonStocks.Data.Models;
+using Equibles.CorporateActions.Data.Models;
 using Equibles.Data;
+using Equibles.Holdings.Data.Models;
+using Equibles.Sec.Data.Models;
 using Equibles.Sec.FinancialFacts.Data.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -22,5 +25,25 @@ internal sealed class PinnedSchemaTestMappings : IModuleConfiguration
         builder.Entity<FinancialFactsSyncStatus>().Ignore(status => status.ImportAttemptId);
         builder.Entity<FinancialFactsSyncStatus>().Ignore(status => status.ImportAttempts);
         builder.Entity<FinancialFactsSyncStatus>().Ignore(status => status.NextAttemptAt);
+
+        // Added by 20261014150246_SplitShareCountEvidence.
+        builder.Entity<StockSplit>().Ignore(split => split.ShareCountEvidence);
+        builder.Entity<StockSplit>().Ignore(split => split.ShareCountEvidenceAsOf);
+        builder.Entity<StockSplit>().Ignore(split => split.ShareCountEvidenceTime);
+
+        // Added by 20261014214216_DocumentAcceptedAt.
+        builder.Entity<Document>().Ignore(document => document.AcceptedAt);
+
+        // Added by 20261010015440_AddListingActivityConcentrationColumns.
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.CurrentValue);
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.CurrentFilerCount);
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.HolderValueSquaredSum);
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.TopOneValue);
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.TopFiveValue);
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.TopTenValue);
+
+        // Added by 20261015133022_DocumentAsFiledPdf.
+        builder.Entity<Document>().Ignore(document => document.AsFiledPdfContent);
+        builder.Entity<Document>().Ignore(document => document.AsFiledPdfContentId);
     }
 }

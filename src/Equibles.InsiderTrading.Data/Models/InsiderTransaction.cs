@@ -41,9 +41,12 @@ public class InsiderTransaction
     /// rows) stayed null (#7164, EquiblesCommercial); v8 stamps the authoritative
     /// Form 3/4/5 family so amendments cannot supersede a different ownership form;
     /// v9 tags the no-securities-owned sentinel as a holding so it participates only
-    /// in holding-section supersession; v10 restores source-row identity through rejected dates.
+    /// in holding-section supersession; v10 restores source-row identity through rejected dates;
+    /// v11 re-reads spelled-out ADS ratios above twenty ("sixty", "thirty-five") so per-ADS
+    /// prices on ordinary-share rows are restated to per-ordinary; v12 records the reporting
+    /// owner's relationship boxes on each row.
     /// </summary>
-    public const int CurrentParserVersion = 10;
+    public const int CurrentParserVersion = 12;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -144,6 +147,12 @@ public class InsiderTransaction
     public InsiderSecurityKind SecurityKind { get; set; } = InsiderSecurityKind.Unknown;
 
     /// <summary>
+    /// The relationship boxes ticked by this filing's reporting owners (the union across joint
+    /// filers); null until derived at parser version 12 or when no owner states one.
+    /// </summary>
+    public InsiderRelationship? OwnerRelationship { get; set; }
+
+    /// <summary>
     /// Parsing-algorithm version that produced this row. See
     /// <see cref="CurrentParserVersion"/>. Defaults to 0 for rows ingested
     /// before versioning, which marks them for reprocessing.
@@ -194,6 +203,20 @@ public class InsiderTransaction
     /// sorted by Shares × PricePerShare.
     /// </summary>
     public bool? IsPriceValid { get; set; }
+
+    /// <summary>
+    /// The derivative row's <c>underlyingSecurityShares</c>, read at parse time as evidence for
+    /// price validation only; never stored, so it is null on rows loaded from the database.
+    /// </summary>
+    [NotMapped]
+    public long? UnderlyingShares { get; set; }
+
+    /// <summary>
+    /// The derivative row's <c>conversionOrExercisePrice</c>, read at parse time as evidence for
+    /// price validation only; never stored, so it is null on rows loaded from the database.
+    /// </summary>
+    [NotMapped]
+    public decimal? ExercisePrice { get; set; }
 
     public DateTime CreationTime { get; set; } = DateTime.UtcNow;
 }

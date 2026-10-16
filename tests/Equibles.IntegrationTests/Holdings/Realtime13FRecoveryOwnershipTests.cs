@@ -135,7 +135,8 @@ public class Realtime13FRecoveryOwnershipTests(ParadeDbFixture fixture) : IAsync
             );
         (await db.Set<ProcessedFiling>().CountAsync()).Should().Be(1);
 
-        // The newly discovered tail is durable evidence even if submissions omits it.
+        // The newly discovered tail is durable evidence even if submissions omits it: EDGAR still
+        // publishes the filing, so the index only lags and recovery keeps refusing.
         edgar
             .GetCompanyFilings("123", null, Filed.AddDays(-10), Arg.Any<DateOnly?>())
             .Returns([
@@ -152,6 +153,7 @@ public class Realtime13FRecoveryOwnershipTests(ParadeDbFixture fixture) : IAsync
                     FilingDate = Filed,
                 },
             ]);
+        edgar.FilingExists("123", "new-tail", Arg.Any<CancellationToken>()).Returns(true);
         var recoveryIngestion = Substitute.For<Realtime13FIngestionService>(
             edgar,
             new Filing13FXmlParser(),
@@ -170,11 +172,13 @@ public class Realtime13FRecoveryOwnershipTests(ParadeDbFixture fixture) : IAsync
         await recovery.Recover(new(2020, 1, 1), CancellationToken.None);
         await recoveryIngestion
             .DidNotReceive()
-            .IngestSpecificFilings(
+            .ReplayRecoveryTail(
                 Arg.Any<IReadOnlyCollection<EdgarDailyIndexEntry>>(),
+                Arg.Any<IReadOnlySet<string>>(),
                 Arg.Any<DateOnly>(),
                 Arg.Any<CancellationToken>()
             );
+        await edgar.Received(1).FilingExists("123", "new-tail", Arg.Any<CancellationToken>());
         (await failures.GetAll().CountAsync(r => r.ResolvedAt == null)).Should().Be(3);
     }
 
@@ -208,6 +212,47 @@ public class Realtime13FRecoveryOwnershipTests(ParadeDbFixture fixture) : IAsync
                 .Received(1)
                 .GetFilingArtifactNames(Arg.Any<string>(), accession, Arg.Any<CancellationToken>());
         (await db.Set<HoldingsImportFailure>().CountAsync()).Should().Be(3);
+    }
+
+    [Fact]
+    public async Task RecoveryReplay_LeavesTheStoredTailUnfetched_WhileThePendingFilingWritesNothing()
+    {
+        await using var db = fixture.CreateDbContext();
+        db.Add(new ProcessedFiling { AccessionNumber = "stored" });
+        await db.SaveChangesAsync();
+        var edgar = Substitute.For<ISecEdgarClient>();
+        // Unreadable artifacts return before any holdings write.
+        edgar
+            .GetFilingArtifactNames(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns([]);
+
+        var result = await Ingestion(edgar)
+            .ReplayRecoveryTail(
+                [
+                    Entry("unseen", Filed.AddDays(2)),
+                    Entry("stored", Filed.AddDays(1)),
+                    Entry("stuck", Filed),
+                ],
+                new HashSet<string> { "stuck" },
+                new(2020, 1, 1),
+                CancellationToken.None
+            );
+
+        result.Attempted.Should().Be(2);
+        result.Skipped.Should().Be(1);
+        result.Complete.Should().BeFalse();
+        result.Resolvable.Should().BeEmpty();
+        await edgar
+            .DidNotReceive()
+            .GetFilingArtifactNames(Arg.Any<string>(), "stored", Arg.Any<CancellationToken>());
+        foreach (var accession in new[] { "stuck", "unseen" })
+            await edgar
+                .Received(1)
+                .GetFilingArtifactNames(Arg.Any<string>(), accession, Arg.Any<CancellationToken>());
     }
 
     [Fact]

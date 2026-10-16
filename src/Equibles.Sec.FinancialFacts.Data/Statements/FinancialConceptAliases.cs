@@ -49,6 +49,11 @@ public static class FinancialConceptAliases
             // contract tags (fee revenue must never outrank the headline).
             // Nonfinancial filers never tag it, so they are unaffected.
             G("RevenuesNetOfInterestExpense"),
+            // Utilities' income-statement "Operating revenues" total (DTE, XEL, NEE);
+            // their contract tags omit alternative-revenue and derivative lines of either
+            // sign (NEE FY2022: 20,956 total net of derivative losses vs ~23,000 contract).
+            // After Revenues because some filers tag a small slice here beside Revenues.
+            G("RegulatedAndUnregulatedOperatingRevenue"),
             G("RevenueFromContractWithCustomerExcludingAssessedTax"),
             // Some filers (REITs like ARE) tag their total-revenue line with the
             // assessed-tax-inclusive ASC 606 variant and never file the excluding
@@ -437,7 +442,51 @@ public static class FinancialConceptAliases
         ["apic"] = "additional-paid-in-capital",
     };
 
+    // Balance-sheet positions and share counts: each value is as of a date, so a series of
+    // them is identified by that date, never by the fiscal period the filing stamped on it.
+    private static readonly HashSet<string> InstantAliases =
+    [
+        "cash",
+        "short-term-investments",
+        "current-financial-assets-fvtpl",
+        "current-financial-assets-fvoci",
+        "current-financial-assets-amortised-cost",
+        "accounts-receivable",
+        "inventory",
+        "current-assets",
+        "property-plant-and-equipment",
+        "operating-lease-assets",
+        "goodwill",
+        "intangible-assets",
+        "long-term-investments",
+        "total-assets",
+        "accounts-payable",
+        "accrued-liabilities",
+        "deferred-revenue",
+        "short-term-debt",
+        "current-liabilities",
+        "long-term-debt",
+        "operating-lease-liabilities",
+        "deferred-revenue-noncurrent",
+        "total-liabilities",
+        "common-stock-value",
+        "additional-paid-in-capital",
+        "retained-earnings",
+        "accumulated-oci",
+        "treasury-stock",
+        "stockholders-equity",
+        "total-liabilities-and-equity",
+        "shares-outstanding",
+    ];
+
     public static IReadOnlyCollection<string> SupportedAliases => Map.Keys;
+
+    /// <summary>Whether the alias names a value as of a date rather than a flow over a period.</summary>
+    public static bool IsInstant(string alias)
+    {
+        var key = Normalize(alias);
+        return InstantAliases.Contains(Synonyms.GetValueOrDefault(key, key));
+    }
 
     public static bool TryResolve(string alias, out IReadOnlyList<ConceptRef> concepts)
     {

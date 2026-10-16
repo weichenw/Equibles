@@ -24,4 +24,10 @@ public enum HoldingsImportFailureReason
 
     [Display(Name = "Awaiting ordered filing recovery")]
     PendingRecovery,
+
+    [Display(Name = "Report period is not a calendar quarter end")]
+    OffQuarterReportPeriod,
+
+    [Display(Name = "Filing withdrawn from EDGAR")]
+    SourceWithdrawn,
 }
