@@ -9,10 +9,35 @@ x-embedding-environment: &embedding-environment
 services:
   db:
     image: paradedb/paradedb:latest
+    # ParadeDB's init script autotunes from VM RAM at volume creation — when
+    # this volume was created it saw 16GB and wrote shared_buffers=4055MB into
+    # postgresql.conf, i.e. half of the 8GB VM it now lives in. Command-line
+    # overrides win over the baked-in config and keep sizing deterministic
+    # across hosts (8GB MBP VM, 3GB mini VM).
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - work_mem=16MB
+      # Backfill sorts on the big tables spill to pgsql_tmp; without this the
+      # spill is unbounded and a single giant sort can fill the VM's last
+      # ~5GB. Overflows error that one session (worker retries the batch)
+      # instead of filling the disk.
+      - -c
+      - temp_file_limit=2GB
     restart: unless-stopped
     ports:
       - "5432:5432"
     environment:
+      # Read once at volume init; false stops ParadeDB re-baking hardware-derived
+      # buffer sizes into postgresql.conf on fresh volumes (e.g. the mini).
+      # Runtime sizing is governed by the command: overrides above regardless.
+      PDB_TUNE: "false"
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: equibles
