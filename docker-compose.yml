@@ -107,6 +107,13 @@ services:
     build:
       context: .
       dockerfile: src/Equibles.Worker.Host/Dockerfile
+    # The backfill is fetch/parse-bound (db CPU <4%) and pegs one vCPU
+    # continuously for weeks. 0.75 keeps a core available for anything else
+    # sharing this machine; costs ~25% sync throughput. Remove to go full tilt.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
     restart: unless-stopped
     env_file:
       - path: .env
