@@ -181,6 +181,9 @@ builder.Services.AutoWireServicesFrom<Equibles.InsiderTrading.BusinessLogic.Insi
 // Re-add hosted scrapers from git history if needed.
 builder.Services.AddWorkerServices();
 builder.Services.AddSecWorker();
+// Starts FileBackfillWorker (drains DB blobs to the filesystem store) and
+// BlobDeletionSweepWorker. Required for FileStorage__Enabled to do anything.
+builder.Services.AddMediaWorker();
 builder.Services.AddSecFinancialFactsWorker();
 // Holdings reconciliation services only (no hosted scrapers): registers
 // HoldingsImportService and HoldingsRescanSignal, which the auto-discovered
