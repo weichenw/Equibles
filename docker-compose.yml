@@ -8,7 +8,10 @@ x-embedding-environment: &embedding-environment
 
 services:
   db:
-    image: paradedb/paradedb:latest
+    # Pinned: chunk searches use parallel BM25 workers, which need pg_search 0.25.11 or
+    # later. A bump that changes pg_search ships with a migration running
+    # ALTER EXTENSION ... UPDATE, or BM25 queries fail on the existing database.
+    image: paradedb/paradedb:0.26.2-pg18
     # ParadeDB's init script autotunes from VM RAM at volume creation — when
     # this volume was created it saw 16GB and wrote shared_buffers=4055MB into
     # postgresql.conf, i.e. half of the 8GB VM it now lives in. Command-line

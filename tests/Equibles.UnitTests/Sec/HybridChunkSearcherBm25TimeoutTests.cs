@@ -356,6 +356,74 @@ public class HybridChunkSearcherBm25TimeoutTests
         );
     }
 
+    // Every full pass ran out of budget on a cold index during a burst: the widest pass the caller
+    // opted into runs once more on the degraded budget, over warmed pages, and its answer stands.
+    [Fact]
+    public async Task AllPassesTimeout_WarmRetryOfTheWidestPassAnswers()
+    {
+        var chunk = new Chunk { Id = Guid.NewGuid(), Content = "investment in Anthropic" };
+        var chunkRepository = new TimeoutChunkRepository(
+            coldPasses: 2,
+            disjunctiveResults: [chunk],
+            allChunks: [chunk]
+        );
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        var outcome = await searcher.SearchDetailed(
+            "Anthropic investment Gemini competition",
+            5,
+            disjunctiveFallback: true
+        );
+
+        Assert.Equal(chunk.Id, Assert.Single(outcome.Chunks).Id);
+        Assert.False(outcome.Incomplete);
+        Assert.Single(chunkRepository.ConjunctiveBudgets);
+        Assert.Equal(new int?[] { 3, 3 }, chunkRepository.DisjunctiveBudgets);
+    }
+
+    // Without the any-term opt-in the warm retry is the conjunctive pass itself, so a ticker-scoped
+    // search whose fallback and vector arm found nothing still answers from the keyword index.
+    [Fact]
+    public async Task ConjunctiveTimeout_WithoutOptIn_WarmConjunctiveRetryAnswers()
+    {
+        var chunk = new Chunk
+        {
+            Id = Guid.NewGuid(),
+            Ticker = "GOOGL",
+            Content = "Gemini",
+        };
+        var chunkRepository = new TimeoutChunkRepository(
+            coldPasses: 1,
+            conjunctiveResults: [chunk],
+            allChunks: [chunk]
+        );
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        var results = await searcher.Search("Gemini competition", 5, ticker: "GOOGL");
+
+        Assert.Equal(chunk.Id, Assert.Single(results).Id);
+        Assert.Equal(new int?[] { 3, 3 }, chunkRepository.ConjunctiveBudgets);
+        Assert.Empty(chunkRepository.DisjunctiveBudgets);
+    }
+
+    // A warm retry that completes empty has proven "no matches" for the widest pass, so the search
+    // returns empty instead of a timeout the caller would retry for nothing.
+    [Fact]
+    public async Task AllPassesTimeout_WarmRetryCompletesEmpty_ReturnsProvenEmpty()
+    {
+        var chunkRepository = new TimeoutChunkRepository(coldPasses: 2);
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        var outcome = await searcher.SearchDetailed(
+            "query matching nothing",
+            5,
+            disjunctiveFallback: true
+        );
+
+        Assert.Empty(outcome.Chunks);
+        Assert.False(outcome.Incomplete);
+    }
+
     // A pass that answered, or a scoped fallback that answered, never pays for the extra pass.
     [Fact]
     public async Task HealthyOrScopedAnswer_NeverRunsTheShortenedPass()
@@ -403,6 +471,128 @@ public class HybridChunkSearcherBm25TimeoutTests
             searcher.Search("discount to PDP PV-10 share price valuation", 5)
         );
         Assert.Empty(chunkRepository.ReducedTexts);
+    }
+
+    // A ticker-scoped pass that validated in-scope matches before its budget ran out keeps them:
+    // they are the true top of the ranking, so the call answers instead of failing, flagged
+    // incomplete because more may exist below the prefix that was read.
+    [Fact]
+    public async Task ConjunctiveTimeout_TickerScoped_KeepsValidatedPartialResults_AsIncomplete()
+    {
+        var first = new Chunk
+        {
+            Id = Guid.NewGuid(),
+            Ticker = "AAPL",
+            Content = "best match",
+        };
+        var second = new Chunk
+        {
+            Id = Guid.NewGuid(),
+            Ticker = "AAPL",
+            Content = "next match",
+        };
+        var chunkRepository = new TimeoutChunkRepository(
+            conjunctiveTimesOut: true,
+            disjunctiveTimesOut: true,
+            conjunctivePartial: [first, second],
+            allChunks: [first, second]
+        );
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        var outcome = await searcher.SearchDetailed(
+            "segment revenue",
+            5,
+            ticker: "AAPL",
+            disjunctiveFallback: true
+        );
+
+        Assert.Equal([first.Id, second.Id], outcome.Chunks.Select(chunk => chunk.Id));
+        Assert.True(outcome.Incomplete);
+        Assert.Empty(chunkRepository.ReducedTexts);
+    }
+
+    [Fact]
+    public async Task DisjunctiveTimeout_AppendsItsPartialResults_AfterTheConjunctiveOnes()
+    {
+        var precise = new Chunk { Id = Guid.NewGuid(), Content = "precise match" };
+        var broad = new Chunk { Id = Guid.NewGuid(), Content = "broadened match" };
+        var chunkRepository = new TimeoutChunkRepository(
+            disjunctiveTimesOut: true,
+            conjunctiveResults: [precise],
+            disjunctivePartial: [precise, broad],
+            allChunks: [precise, broad]
+        );
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        var outcome = await searcher.SearchDetailed("query", 5, disjunctiveFallback: true);
+
+        Assert.Equal([precise.Id, broad.Id], outcome.Chunks.Select(chunk => chunk.Id));
+        Assert.True(outcome.Incomplete);
+    }
+
+    // A spent budget that validated nothing is still not a factual no-match.
+    [Fact]
+    public async Task AllPassesTimeout_TickerScoped_EmptyPartialResults_SurfacesTheTimeout()
+    {
+        var chunkRepository = new TimeoutChunkRepository(
+            conjunctiveTimesOut: true,
+            disjunctiveTimesOut: true
+        );
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        await Assert.ThrowsAsync<ChunkSearchTimeoutException>(() =>
+            searcher.SearchDetailed("segment revenue", 5, ticker: "AAPL", disjunctiveFallback: true)
+        );
+    }
+
+    [Fact]
+    public async Task ConjunctiveTimeout_ScopedFallbackAnswer_ReplacesPartialResults_AsComplete()
+    {
+        var partial = new Chunk
+        {
+            Id = Guid.NewGuid(),
+            Ticker = "TSM",
+            Content = "partial match",
+        };
+        var fallback = new Chunk
+        {
+            Id = Guid.NewGuid(),
+            Ticker = "TSM",
+            Content = "full-text match",
+        };
+        var chunkRepository = new TimeoutChunkRepository(
+            conjunctiveTimesOut: true,
+            conjunctivePartial: [partial],
+            scopedFallbackResults: [fallback],
+            allChunks: [partial, fallback]
+        );
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        var outcome = await searcher.SearchDetailed(
+            "segment revenue",
+            5,
+            ticker: "TSM",
+            disjunctiveFallback: true
+        );
+
+        Assert.Equal(fallback.Id, Assert.Single(outcome.Chunks).Id);
+        Assert.False(outcome.Incomplete);
+    }
+
+    [Fact]
+    public async Task CompletedSearch_IsNotIncomplete()
+    {
+        var chunk = new Chunk { Id = Guid.NewGuid(), Content = "precise match" };
+        var chunkRepository = new TimeoutChunkRepository(
+            conjunctiveResults: [chunk],
+            allChunks: [chunk]
+        );
+        var searcher = NewSearcher(chunkRepository, new StubEmbeddingRepository([]));
+
+        var outcome = await searcher.SearchDetailed("query", 5, disjunctiveFallback: true);
+
+        Assert.Equal(chunk.Id, Assert.Single(outcome.Chunks).Id);
+        Assert.False(outcome.Incomplete);
     }
 
     private static HybridChunkSearcher NewSearcher(

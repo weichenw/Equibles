@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Data;
-using System.Globalization;
-using System.Text.RegularExpressions;
 using Equibles.CommonStocks.BusinessLogic;
 using Equibles.CommonStocks.BusinessLogic.Websites;
 using Equibles.CommonStocks.Data.Helpers;
@@ -69,6 +67,8 @@ public class CompanySyncService : ICompanySyncService
                 secCompanies.Count
             );
 
+            await MaintainFiledEvidence(secCompanies);
+
             if (_workerOptions.TickersToSync?.Count > 0)
             {
                 secCompanies = secCompanies
@@ -85,6 +85,7 @@ public class CompanySyncService : ICompanySyncService
             using var listingSync = await CommonStockListingSyncLock.Acquire();
             using var scope = _serviceScopeFactory.CreateScope();
             var state = await BuildSyncState(secCompanies, scope);
+            await DropFilingSuffixesFromDepartedRegistrants(state);
 
             foreach (var secCompany in secCompanies)
             {
@@ -173,6 +174,70 @@ public class CompanySyncService : ICompanySyncService
         }
     }
 
+    // Runs on the whole directory, before a configured ticker filter narrows it. Each step fails on
+    // its own: neither the dated directory spans nor the re-stamped filed types may stop the sync.
+    private async Task MaintainFiledEvidence(List<CompanyInfo> secCompanies)
+    {
+        using var scope = _serviceScopeFactory.CreateScope();
+        try
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<EquiblesFinancialDbContext>();
+            var recorded = await SecTickerDirectoryLedger.Record(
+                dbContext,
+                secCompanies,
+                DateOnly.FromDateTime(DateTime.UtcNow)
+            );
+            _logger.LogInformation("Recorded {Count} SEC ticker directory observations", recorded);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error recording the SEC ticker directory");
+            await ReportError(
+                "CompanySync.RecordTickerDirectory",
+                ex,
+                $"companies: {secCompanies.Count}"
+            );
+        }
+
+        try
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<EquiblesFinancialDbContext>();
+            var restamped = await RegistrationTypeRestamp.Apply(dbContext);
+            if (restamped > 0)
+                _logger.LogInformation(
+                    "Re-stamped the filed registration type of {Count} securities",
+                    restamped
+                );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error re-stamping filed registration types");
+            await ReportError("CompanySync.RestampRegistrationTypes", ex, "");
+        }
+    }
+
+    // A registrant SEC no longer lists keeps the name the sync last gave it, so the filing-suffix rule
+    // reaches it here. Only the suffix goes: re-casing a name another source wrote is not this pass's call.
+    private async Task DropFilingSuffixesFromDepartedRegistrants(StockSyncState state)
+    {
+        var renamed = 0;
+        foreach (var stock in state.DepartedRegistrants)
+        {
+            var name = CompanyNameCasing.WithoutFilingSuffixes(stock.Name);
+            if (name == stock.Name)
+                continue;
+            stock.Name = name;
+            renamed++;
+        }
+        if (renamed == 0)
+            return;
+        await state.CommonStockRepository.SaveChanges();
+        _logger.LogInformation(
+            "Dropped SEC filing suffixes from {Count} registrants SEC no longer lists",
+            renamed
+        );
+    }
+
     private async Task<StockSyncState> BuildSyncState(
         List<CompanyInfo> secCompanies,
         IServiceScope scope
@@ -195,6 +260,11 @@ public class CompanySyncService : ICompanySyncService
         var allExistingStocks = await commonStockRepository.GetAll().ToListAsync();
         var existingStocks = allExistingStocks
             .Where(stock => secCiks.Contains(CikNormalizer.Canonicalize(stock.Cik)))
+            .ToList();
+        var departedRegistrants = allExistingStocks
+            .Where(stock =>
+                CikNormalizer.Canonicalize(stock.Cik) is { } cik && !secCiks.Contains(cik)
+            )
             .ToList();
         var existingCiks = existingStocks
             .Select(stock => CikNormalizer.Canonicalize(stock.Cik))
@@ -237,6 +307,7 @@ public class CompanySyncService : ICompanySyncService
         {
             SecCiks = secCiks,
             ExistingStocks = existingStocks,
+            DepartedRegistrants = departedRegistrants,
             ExistingCiks = existingCiks,
             ExistingPrimaryTickers = existingPrimaryTickers,
             PrimaryTickerToStock = primaryTickerToStock,
@@ -885,75 +956,7 @@ public class CompanySyncService : ICompanySyncService
         return long.TryParse(cik, out var n) ? n : long.MaxValue;
     }
 
-    private static readonly HashSet<string> UpperCaseAbbreviations = new(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        "LLC",
-        "LLP",
-        "LP",
-        "PLC",
-        "NV",
-        "SA",
-        "AG",
-        "SE",
-        "AB",
-        "ASA",
-        "ETF",
-        "ADR",
-        "REIT",
-        "USA",
-        "US",
-        "UK",
-    };
-
-    private static readonly Regex RomanNumeralPattern = new(
-        @"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled
-    );
-
-    // Three-letter English words that happen to satisfy the Roman regex
-    // (MIX=1009, DIV=504, LIV=54, CIV=104). Listing them explicitly keeps
-    // legitimate short numerals like XL (40), XC (90), CD (400), CM (900),
-    // and combos (XLI, XLV, MII) working.
-    private static readonly HashSet<string> RomanNumeralFalsePositives = new(
-        StringComparer.OrdinalIgnoreCase
-    )
-    {
-        "MIX",
-        "DIV",
-        "LIV",
-        "CIV",
-    };
-
-    private static bool IsRomanNumeral(string token) =>
-        RomanNumeralPattern.IsMatch(token) && !RomanNumeralFalsePositives.Contains(token);
-
-    private static string NormalizeCompanyName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return name;
-
-        if (name.Any(char.IsLower))
-            return name;
-
-        var titleCased = CultureInfo.InvariantCulture.TextInfo.ToTitleCase(name.ToLowerInvariant());
-
-        var words = titleCased.Split(' ');
-        for (var i = 0; i < words.Length; i++)
-        {
-            var stripped = words[i].TrimStart('(').TrimEnd('.', ',', ';', ')');
-            if (
-                stripped.Length > 0
-                && (UpperCaseAbbreviations.Contains(stripped) || IsRomanNumeral(stripped))
-            )
-            {
-                words[i] = words[i].ToUpperInvariant();
-            }
-        }
-
-        return string.Join(' ', words);
-    }
+    private static string NormalizeCompanyName(string name) => CompanyNameCasing.Normalize(name);
 
     // Subsidiaries we already decided about: each entry maps a subsidiary CIK to
     // its parent stock. Incoming SEC entries whose CIK appears here are silently
@@ -1191,6 +1194,7 @@ public class CompanySyncService : ICompanySyncService
     {
         public HashSet<string> SecCiks { get; init; }
         public List<EquityIssuer> ExistingStocks { get; init; }
+        public List<EquityIssuer> DepartedRegistrants { get; init; } = [];
         public HashSet<string> ExistingCiks { get; init; }
         public HashSet<string> ExistingPrimaryTickers { get; init; }
         public Dictionary<string, EquityIssuer> PrimaryTickerToStock { get; init; }

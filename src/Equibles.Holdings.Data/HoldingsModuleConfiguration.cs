@@ -1,4 +1,5 @@
 using Equibles.CommonStocks.Data.Models;
+using Equibles.CommonStocks.Data.Models.Taxonomies;
 using Equibles.Holdings.Data.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -178,10 +179,11 @@ public class HoldingsModuleConfiguration : Equibles.Data.IFinancialModule
             })
             .IncludeProperties(h => new { h.Shares, h.Value });
 
-        // Serves the per-holder 13F ranking pages and every quarter-slice read of the snapshot
-        // rebuild (ReportDate = <quarter>[ OR <prior>] AND FilingType = 13F) as one contiguous
-        // index-only range, instead of skip-scanning a holder- or stock-leading index or fetching
-        // each heap tuple for AccessionNumber.
+        // Serves the per-holder 13F ranking pages, every quarter-slice read of the snapshot
+        // rebuild (ReportDate = <quarter>[ OR <prior>] AND FilingType = 13F) and the
+        // holder-intelligence rebuild's filer-batch loads and aggregate benchmark as one
+        // contiguous index-only range, instead of skip-scanning a holder- or stock-leading index or
+        // fetching each heap tuple for AccessionNumber or the share, option and value-state columns.
         builder
             .Entity<InstitutionalHolding>()
             .HasIndex(h => new
@@ -190,7 +192,7 @@ public class HoldingsModuleConfiguration : Equibles.Data.IFinancialModule
                 h.InstitutionalHolderId,
                 h.EquityIssuerId,
             })
-            .HasDatabaseName("IX_InstitutionalHolding_QuarterRebuild")
+            .HasDatabaseName("IX_InstitutionalHolding_QuarterSlice")
             .IncludeProperties(h => new
             {
                 h.Shares,
@@ -199,6 +201,11 @@ public class HoldingsModuleConfiguration : Equibles.Data.IFinancialModule
                 h.FilingDate,
                 h.AccessionNumber,
                 h.ListedTicker,
+                h.ShareType,
+                h.OptionType,
+                h.FiledValue,
+                h.ValuePending,
+                h.ValueUnavailable,
             })
             .IsCreatedConcurrently();
 
@@ -299,15 +306,138 @@ public class HoldingsModuleConfiguration : Equibles.Data.IFinancialModule
 
         builder.Entity<UnmappedCusip>();
         builder.Entity<FilingOtherManager>();
+        builder.Entity<Form13FNotice>();
+        builder.Entity<Form13FNoticeReporter>();
+        builder.Entity<Form13FNoticeDataSet>();
         builder.Entity<ProcessedDataSet>();
+        builder.Entity<ProcessedDataSetAccession>();
         builder.Entity<HoldingsCusipRescan>();
         builder.Entity<ProcessedFiling>();
         builder.Entity<HoldingsImportFailure>();
         builder.Entity<HoldingLabelConvergenceState>();
         builder.Entity<InstitutionalFiling>();
         builder.Entity<RealtimeSweepState>();
+        builder.Entity<BeneficialOwnershipFiling>();
+        builder.Entity<HolderClassificationEvidence>();
+        builder.Entity<InstitutionalHolderProfile>();
+        builder.Entity<HolderSuccession>();
+        builder.Entity<HolderLinkEvidence>();
+        builder.Entity<HolderRollup>();
+        builder.Entity<FundSeriesHolderLink>();
+        builder.Entity<BeneficialOwnershipReportingPerson>();
         builder.Entity<FundScore>();
         builder.Entity<FundScoreAttempt>();
+
+        // Holder-intelligence engine: per-quarter drain state, per-holder metrics and the
+        // presence bitmask tenure reads, unique per exact listing with a null primary.
+        builder.Entity<HolderIntelligenceQuarterState>();
+        builder.Entity<HolderQuarterlyMetrics>();
+        // The compared predecessor is provenance; removing that filer must never delete metrics.
+        builder
+            .Entity<HolderQuarterlyMetrics>()
+            .HasOne<InstitutionalHolder>()
+            .WithMany()
+            .HasForeignKey(metrics => metrics.ComparedHolderId)
+            .OnDelete(DeleteBehavior.SetNull);
+        builder.Entity<HolderQuarterlyBenchmarkActiveShare>();
+        // A sector change in the taxonomy must never silently delete published flows.
+        builder
+            .Entity<HolderQuarterlySectorFlow>()
+            .HasOne<Sector>()
+            .WithMany()
+            .HasForeignKey(flow => flow.SectorId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder
+            .Entity<HolderQuarterlySectorFlow>()
+            .HasIndex(flow => new
+            {
+                flow.InstitutionalHolderId,
+                flow.ReportDate,
+                flow.SectorGroup,
+                flow.SectorId,
+            })
+            .IsUnique()
+            .AreNullsDistinct(false);
+        builder
+            .Entity<HolderStockPresence>()
+            .HasIndex(p => new
+            {
+                p.InstitutionalHolderId,
+                p.EquityIssuerId,
+                p.ListedTicker,
+            })
+            .IsUnique()
+            .AreNullsDistinct(false);
+        builder
+            .Entity<HolderPositionCostBasis>()
+            .HasIndex(p => new
+            {
+                p.InstitutionalHolderId,
+                p.EquityIssuerId,
+                p.ListedTicker,
+            })
+            .IsUnique()
+            .AreNullsDistinct(false);
+        builder
+            .Entity<StockQuarterlyHolderSignals>()
+            .HasIndex(s => new
+            {
+                s.EquityIssuerId,
+                s.ListedTicker,
+                s.ReportDate,
+            })
+            .IsUnique()
+            .AreNullsDistinct(false);
+        builder
+            .Entity<StockQuarterlyHolderOverlap>()
+            .HasIndex(o => new
+            {
+                o.EquityIssuerId,
+                o.ListedTicker,
+                o.ReportDate,
+                o.PeerEquityIssuerId,
+                o.PeerListedTicker,
+            })
+            .IsUnique()
+            .AreNullsDistinct(false);
+
+        // Registered-fund ownership by N-CEN fund type, published per closed quarter by its own
+        // drain; unique per exact listing with a null primary, and a retired issuer keeps its rows.
+        builder.Entity<FundOwnershipQuarterState>();
+        builder
+            .Entity<StockQuarterlyFundOwnership>()
+            .HasOne<EquityIssuer>()
+            .WithMany()
+            .HasForeignKey(row => row.EquityIssuerId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder
+            .Entity<StockQuarterlyFundOwnership>()
+            .HasIndex(row => new
+            {
+                row.EquityIssuerId,
+                row.ListedTicker,
+                row.ReportDate,
+                row.Bucket,
+            })
+            .IsUnique()
+            .AreNullsDistinct(false);
+        builder
+            .Entity<HolderStockAdvisedFundShares>()
+            .HasOne<EquityIssuer>()
+            .WithMany()
+            .HasForeignKey(row => row.EquityIssuerId)
+            .OnDelete(DeleteBehavior.Restrict);
+        builder
+            .Entity<HolderStockAdvisedFundShares>()
+            .HasIndex(row => new
+            {
+                row.InstitutionalHolderId,
+                row.EquityIssuerId,
+                row.ListedTicker,
+                row.ReportDate,
+            })
+            .IsUnique()
+            .AreNullsDistinct(false);
 
         // Audit trail for on-demand 13F reconciliation runs; its CreationTime and
         // InstitutionalHolderId indexes are declared as attributes on the entity.

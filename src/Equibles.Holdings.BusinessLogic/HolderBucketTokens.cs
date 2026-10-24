@@ -1,0 +1,240 @@
+using Equibles.Holdings.BusinessLogic.Intelligence.Models;
+using Equibles.Holdings.Data.Models;
+
+namespace Equibles.Holdings.BusinessLogic;
+
+/// <summary>
+/// The short URL and tool-argument tokens for holder entity types and style bands, with the
+/// compact labels tables print. Every surface parses these filters here, so an unknown token is
+/// refused the same way everywhere.
+/// </summary>
+public static class HolderBucketTokens
+{
+    private static readonly (string Token, HolderEntityType Value, string Label)[] EntityTypes =
+    [
+        ("adv", HolderEntityType.RegisteredAdviser, "Registered adviser"),
+        ("era", HolderEntityType.ExemptReportingAdviser, "Exempt adviser"),
+        ("ia", HolderEntityType.InvestmentAdviser, "Adviser"),
+        ("bank", HolderEntityType.Bank, "Bank"),
+        ("ins", HolderEntityType.InsuranceCompany, "Insurer"),
+        ("bd", HolderEntityType.BrokerDealer, "Broker-dealer"),
+        ("fund", HolderEntityType.RegisteredFund, "Registered fund"),
+        ("plan", HolderEntityType.BenefitPlan, "Benefit plan"),
+        ("nonus", HolderEntityType.NonUsInstitution, "Non-US"),
+        ("hc", HolderEntityType.HoldingCompany, "Holding company"),
+        ("unk", HolderEntityType.Unknown, "Unknown"),
+    ];
+
+    private static readonly (string Token, HolderStyleBand Value, string Label)[] StyleBands =
+    [
+        ("idx", HolderStyleBand.IndexLike, "Index-like"),
+        ("sys", HolderStyleBand.SystematicLike, "Systematic-like"),
+        ("conc", HolderStyleBand.Concentrated, "Concentrated"),
+        ("divact", HolderStyleBand.DiversifiedActive, "Diversified active"),
+        ("unk", HolderStyleBand.Unknown, "Unknown"),
+    ];
+
+    private static readonly (
+        string Token,
+        HolderMixDimension Value,
+        string Label
+    )[] MixDimensions =
+    [
+        ("type", HolderMixDimension.EntityType, "Holder type"),
+        ("style", HolderMixDimension.Style, "Style"),
+        ("turnover", HolderMixDimension.Turnover, "Turnover"),
+        ("horizon", HolderMixDimension.Horizon, "Holding horizon"),
+        ("aum", HolderMixDimension.BookSize, "13F book size"),
+        ("client", HolderMixDimension.ClientBase, "Client base"),
+        ("pf", HolderMixDimension.PrivateFunds, "Private funds"),
+        ("country", HolderMixDimension.Location, "Location"),
+    ];
+
+    public static string EntityTypeTokenList => TokenList(EntityTypes);
+
+    public static string MixDimensionTokenList => TokenList(MixDimensions);
+
+    public static string Token(HolderMixDimension dimension) =>
+        MixDimensions.Single(entry => entry.Value == dimension).Token;
+
+    public static string Label(HolderMixDimension dimension) =>
+        MixDimensions.Single(entry => entry.Value == dimension).Label;
+
+    /// <summary>
+    /// Parses one holder-mix dimension token, case-insensitively. Blank input means the default
+    /// (null dimension); an unknown token returns an error naming the accepted tokens.
+    /// </summary>
+    public static (HolderMixDimension? Dimension, string Error) ParseMixDimension(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return (null, null);
+        var match = MixDimensions.FirstOrDefault(entry =>
+            string.Equals(entry.Token, token.Trim(), StringComparison.OrdinalIgnoreCase)
+        );
+        return match.Token == null
+            ? (null, $"Unknown dimension '{token.Trim()}'. Use one of: {MixDimensionTokenList}.")
+            : (match.Value, null);
+    }
+
+    /// <summary>
+    /// The holder-mix dimension that reads registered funds' Form NPORT-P positions by their Form
+    /// N-CEN fund type instead of splitting 13F filers. It is no <see cref="HolderMixDimension"/>:
+    /// funds sit inside their advisers' 13F reports, so its shares are never 13F totals.
+    /// </summary>
+    public const string FundTypeDimensionToken = "fundtype";
+
+    public const string FundTypeDimensionLabel = "Registered fund type";
+
+    /// <summary>Every token the holder mix accepts: the 13F dimensions, then the fund-type one.</summary>
+    public static string HolderMixDimensionTokenList =>
+        $"{MixDimensionTokenList}, {FundTypeDimensionToken}";
+
+    /// <summary>
+    /// Parses a holder-mix dimension token the way <see cref="ParseMixDimension"/> does, and also
+    /// accepts <see cref="FundTypeDimensionToken"/>, returned as <c>FundType</c> with no 13F dimension.
+    /// </summary>
+    public static (
+        HolderMixDimension? Dimension,
+        bool FundType,
+        string Error
+    ) ParseHolderMixDimension(string token)
+    {
+        if (
+            token != null
+            && string.Equals(
+                token.Trim(),
+                FundTypeDimensionToken,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+            return (null, true, null);
+        var (dimension, error) = ParseMixDimension(token);
+        return error == null
+            ? (dimension, false, null)
+            : (
+                null,
+                false,
+                $"Unknown dimension '{token.Trim()}'. Use one of: {HolderMixDimensionTokenList}."
+            );
+    }
+
+    private static readonly (
+        string Token,
+        HolderFlowGrouping Value,
+        string Label
+    )[] FlowGroupings =
+    [
+        ("none", HolderFlowGrouping.None, "No split"),
+        ("sector", HolderFlowGrouping.Sector, "By sector"),
+    ];
+
+    public static string FlowGroupingTokenList => TokenList(FlowGroupings);
+
+    public static string Token(HolderFlowGrouping grouping) =>
+        FlowGroupings.Single(entry => entry.Value == grouping).Token;
+
+    /// <summary>
+    /// Parses a holder-flow grouping token, case-insensitively. Blank input means no split; an
+    /// unknown token returns an error naming the accepted tokens.
+    /// </summary>
+    public static (HolderFlowGrouping Grouping, string Error) ParseFlowGrouping(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return (HolderFlowGrouping.None, null);
+        var match = FlowGroupings.FirstOrDefault(entry =>
+            string.Equals(entry.Token, token.Trim(), StringComparison.OrdinalIgnoreCase)
+        );
+        return match.Token == null
+            ? (
+                HolderFlowGrouping.None,
+                $"Unknown groupBy '{token.Trim()}'. Use one of: {FlowGroupingTokenList}."
+            )
+            : (match.Value, null);
+    }
+
+    public static string StyleTokenList => TokenList(StyleBands);
+
+    public static string Token(HolderEntityType type) =>
+        EntityTypes.Single(entry => entry.Value == type).Token;
+
+    public static string StyleToken(HolderStyleBand style) =>
+        StyleBands.Single(entry => entry.Value == style).Token;
+
+    // The selected types' tokens in the accepted-token order, for echoing a filter back.
+    public static string Describe(IReadOnlySet<HolderEntityType> types) =>
+        Describe(EntityTypes, types);
+
+    public static string Describe(IReadOnlySet<HolderStyleBand> styles) =>
+        Describe(StyleBands, styles);
+
+    // A holder not yet profiled prints a dash; Unknown means its records decide no type.
+    public static string Label(HolderEntityType? type) =>
+        type == null ? "—" : EntityTypes.Single(entry => entry.Value == type).Label;
+
+    // A holder not yet measured prints a dash; Unknown means its book is too small or unvalued to band.
+    public static string StyleLabel(HolderStyleBand? style) =>
+        style == null ? "—" : StyleBands.Single(entry => entry.Value == style).Label;
+
+    /// <summary>
+    /// Parses comma-separated entity type tokens, case-insensitively. Blank input means no filter
+    /// (null types); any unknown token returns an error naming the accepted tokens.
+    /// </summary>
+    public static (IReadOnlySet<HolderEntityType> Types, string Error) ParseEntityTypes(
+        string tokens
+    ) => ParseEntityTypes(tokens == null ? null : [tokens]);
+
+    /// <summary>
+    /// Parses entity type tokens given one per element; an element may also hold several
+    /// comma-separated tokens.
+    /// </summary>
+    public static (IReadOnlySet<HolderEntityType> Types, string Error) ParseEntityTypes(
+        IEnumerable<string> tokens
+    ) => Parse(EntityTypes, tokens, "holder type");
+
+    /// <summary>Parses style band tokens the way <see cref="ParseEntityTypes(IEnumerable{string})"/> does.</summary>
+    public static (IReadOnlySet<HolderStyleBand> Styles, string Error) ParseStyles(
+        IEnumerable<string> tokens
+    ) => Parse(StyleBands, tokens, "style");
+
+    private static string TokenList<T>((string Token, T Value, string Label)[] table) =>
+        string.Join(", ", table.Select(entry => entry.Token));
+
+    private static string Describe<T>(
+        (string Token, T Value, string Label)[] table,
+        IReadOnlySet<T> selected
+    ) =>
+        string.Join(
+            ", ",
+            table.Where(entry => selected.Contains(entry.Value)).Select(entry => entry.Token)
+        );
+
+    private static (IReadOnlySet<T> Values, string Error) Parse<T>(
+        (string Token, T Value, string Label)[] table,
+        IEnumerable<string> tokens,
+        string kind
+    )
+    {
+        if (tokens == null)
+            return (null, null);
+        var values = new HashSet<T>();
+        foreach (
+            var token in tokens
+                .Where(element => element != null)
+                .SelectMany(element =>
+                    element.Split(
+                        ',',
+                        StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries
+                    )
+                )
+        )
+        {
+            var match = table.FirstOrDefault(entry =>
+                string.Equals(entry.Token, token, StringComparison.OrdinalIgnoreCase)
+            );
+            if (match.Token == null)
+                return (null, $"Unknown {kind} '{token}'. Use one or more of: {TokenList(table)}.");
+            values.Add(match.Value);
+        }
+        return (values.Count == 0 ? null : values, null);
+    }
+}

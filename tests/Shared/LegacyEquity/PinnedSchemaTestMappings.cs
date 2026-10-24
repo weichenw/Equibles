@@ -1,7 +1,9 @@
 using Equibles.CommonStocks.Data.Models;
+using Equibles.Congress.Data.Models;
 using Equibles.CorporateActions.Data.Models;
 using Equibles.Data;
 using Equibles.Holdings.Data.Models;
+using Equibles.InsiderTrading.Data.Models;
 using Equibles.Sec.Data.Models;
 using Equibles.Sec.FinancialFacts.Data.Models;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +20,15 @@ internal sealed class PinnedSchemaTestMappings : IModuleConfiguration
     {
         builder.Entity<EquityIssuer>().Ignore(issuer => issuer.NameAliases);
 
+        // Added by 20261022224629_AddIssuerSecRegistrantProfile.
+        builder.Entity<EquityIssuer>().Ignore(issuer => issuer.StateOfIncorporation);
+        builder.Entity<EquityIssuer>().Ignore(issuer => issuer.BusinessStateOrCountry);
+        builder.Entity<EquityIssuer>().Ignore(issuer => issuer.PeriodicReportFileNumber);
+        builder.Entity<EquityIssuer>().Ignore(issuer => issuer.BdcElectionFiledOn);
+        builder.Entity<EquityIssuer>().Ignore(issuer => issuer.BdcWithdrawalFiledOn);
+        builder.Entity<EquityIssuer>().Ignore(issuer => issuer.BdcHistoryReadOn);
+        builder.Entity<EquityIssuer>().Ignore(issuer => issuer.SecRegistrantProfileReadOn);
+
         // Added by 20260916043012_AddDelayedTrades.
         builder.Entity<EquityListing>().Ignore(listing => listing.YahooPriceSyncAttemptedAt);
 
@@ -25,6 +36,18 @@ internal sealed class PinnedSchemaTestMappings : IModuleConfiguration
         builder.Entity<FinancialFactsSyncStatus>().Ignore(status => status.ImportAttemptId);
         builder.Entity<FinancialFactsSyncStatus>().Ignore(status => status.ImportAttempts);
         builder.Entity<FinancialFactsSyncStatus>().Ignore(status => status.NextAttemptAt);
+
+        // Added by 20261007201000_AddInsiderTransactionOwnerRelationship.
+        builder.Entity<InsiderTransaction>().Ignore(transaction => transaction.OwnerRelationship);
+
+        // Added by 20261020060313_AddInsiderOwnershipVehicle.
+        builder.Entity<InsiderTransaction>().Ignore(transaction => transaction.NatureOfOwnership);
+        builder
+            .Entity<InsiderTransaction>()
+            .Ignore(transaction => transaction.OwnershipNatureFootnoteIds);
+
+        // Added by 20261020075430_AddInsiderBalanceFootnotes.
+        builder.Entity<InsiderTransaction>().Ignore(transaction => transaction.BalanceFootnoteIds);
 
         // Added by 20261014150246_SplitShareCountEvidence.
         builder.Entity<StockSplit>().Ignore(split => split.ShareCountEvidence);
@@ -42,8 +65,36 @@ internal sealed class PinnedSchemaTestMappings : IModuleConfiguration
         builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.TopFiveValue);
         builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.TopTenValue);
 
+        // Added by 20261020085548_SeparateUnmatchedStockActivity.
+        builder.Entity<StockQuarterlyActivity>().Ignore(row => row.UnmatchedCurrentShares);
+        builder.Entity<StockQuarterlyActivity>().Ignore(row => row.UnmatchedPreviousShares);
+        builder.Entity<StockQuarterlyActivity>().Ignore(row => row.UnmatchedCurrentValue);
+        builder.Entity<StockQuarterlyActivity>().Ignore(row => row.UnmatchedPreviousValue);
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.UnmatchedCurrentShares);
+        builder.Entity<StockQuarterlyListingActivity>().Ignore(row => row.UnmatchedPreviousShares);
+        builder.Entity<StockQuarterlyActivityCombined>().Ignore(row => row.UnmatchedCurrentShares);
+        builder.Entity<StockQuarterlyActivityCombined>().Ignore(row => row.UnmatchedPreviousShares);
+        builder.Entity<StockQuarterlyActivityCombined>().Ignore(row => row.UnmatchedCurrentValue);
+        builder.Entity<StockQuarterlyActivityCombined>().Ignore(row => row.UnmatchedPreviousValue);
+
         // Added by 20261015133022_DocumentAsFiledPdf.
         builder.Entity<Document>().Ignore(document => document.AsFiledPdfContent);
         builder.Entity<Document>().Ignore(document => document.AsFiledPdfContentId);
+
+        // Added by 20261017121009_AddHolderIdentityNumbers.
+        builder.Entity<InstitutionalHolder>().Ignore(holder => holder.SecFileNumber);
+        builder.Entity<InstitutionalHolder>().Ignore(holder => holder.IdentityAccession);
+
+        // Added by 20261017145057_AddNCenFilingParserVersion.
+        builder.Entity<NCenFiling>().Ignore(filing => filing.ParserVersion);
+        builder.Entity<NCenFiling>().Ignore(filing => filing.ReprocessAttempts);
+
+        // Added by 20261017203549_AddFinancialFactSource.
+        builder.Entity<FinancialFact>().Ignore(fact => fact.Source);
+
+        // Added by 20261018160523_AddCongressLegislatorTerms.
+        builder.Ignore<CongressMemberTerm>();
+        builder.Ignore<CongressLegislator>();
+        builder.Entity<CongressMember>().Ignore(member => member.BioguideIdSource);
     }
 }

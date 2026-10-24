@@ -1,6 +1,7 @@
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using Equibles.Core.AutoWiring;
@@ -209,15 +210,28 @@ public class SecEdgarClient : ISecEdgarClient
             }
             _submissionsCache[url] = content;
 
+            var recentFilings = MapToFilingData(apiResponse.Filings?.Recent, cik);
+
             return new CompanyMetadata
             {
                 Cik = cik,
                 Name = apiResponse.Name,
                 EntityType = apiResponse.EntityType,
                 Sic = apiResponse.Sic,
+                FilerCik = apiResponse.Cik,
+                SicDescription = apiResponse.SicDescription,
+                Category = apiResponse.Category,
+                StateOfIncorporation = apiResponse.StateOfIncorporation,
+                BusinessStateOrCountry = apiResponse.Addresses?.Business?.LocationCode,
                 Exchanges = apiResponse.Exchanges ?? [],
                 FiscalYearEnd = apiResponse.FiscalYearEnd,
                 Website = apiResponse.Website,
+                PeriodicReportFileNumber = SecRegistrantFilings.PeriodicReportFileNumber(
+                    recentFilings
+                ),
+                BdcElectionFiledOn = SecRegistrantFilings.LatestBdcElection(recentFilings),
+                BdcWithdrawalFiledOn = SecRegistrantFilings.LatestBdcWithdrawal(recentFilings),
+                HasArchivedFilings = apiResponse.Filings?.Files is { Count: > 0 },
             };
         }
         catch (HttpRequestException ex)
@@ -557,6 +571,35 @@ public class SecEdgarClient : ISecEdgarClient
         var response = await SendWithRetryAsync(url, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStreamAsync();
+    }
+
+    public async Task<SecByteRange> DownloadRange(
+        string url,
+        long offset,
+        int count,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+        using var response = await SendWithRetryAsync(
+            url,
+            HttpCompletionOption.ResponseContentRead,
+            cancellationToken,
+            request => request.Headers.Range = new RangeHeaderValue(offset, offset + count - 1)
+        );
+        response.EnsureSuccessStatusCode();
+        var range = response.Content.Headers.ContentRange;
+        if (
+            response.StatusCode != HttpStatusCode.PartialContent
+            || range?.From != offset
+            || range.Length is not { } totalLength
+        )
+            throw new InvalidDataException($"SEC did not serve the requested byte range of {url}.");
+        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        if (bytes.Length != Math.Min(count, totalLength - offset))
+            throw new InvalidDataException($"SEC served a truncated byte range of {url}.");
+        return new SecByteRange(bytes, totalLength);
     }
 
     public async Task<List<EdgarRecentFilingEntry>> GetRecentFilings(
@@ -915,7 +958,8 @@ public class SecEdgarClient : ISecEdgarClient
     private async Task<HttpResponseMessage> SendWithRetryAsync(
         string url,
         HttpCompletionOption completionOption,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<HttpRequestMessage> configureRequest = null
     )
     {
         for (var attempt = 0; attempt <= MaxRetries; attempt++)
@@ -926,7 +970,14 @@ public class SecEdgarClient : ISecEdgarClient
             HttpResponseMessage response;
             try
             {
-                response = await _httpClient.GetAsync(url, completionOption, cancellationToken);
+                // A request message is single-use, so each attempt builds its own.
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                configureRequest?.Invoke(request);
+                response = await _httpClient.SendAsync(
+                    request,
+                    completionOption,
+                    cancellationToken
+                );
             }
             catch (HttpRequestException ex)
                 when (IsTransientNetworkError(ex) && attempt < MaxRetries)
@@ -1200,28 +1251,21 @@ public class SecEdgarClient : ISecEdgarClient
             // by real instruments, so creating a company from such a row lets
             // price enrichment attach another instrument's data. Skip the row;
             // a registrant with no exchange-listed row is not a listed company.
-            if (
-                exchangeIndex != -1
-                && (
-                    row.Count <= exchangeIndex
-                    || string.IsNullOrWhiteSpace(row[exchangeIndex]?.ToString())
-                )
-            )
+            var exchange =
+                exchangeIndex != -1 && row.Count > exchangeIndex
+                    ? row[exchangeIndex]?.ToString()?.Trim()
+                    : null;
+            if (exchangeIndex != -1 && string.IsNullOrEmpty(exchange))
                 continue;
 
-            if (companiesByCik.TryGetValue(cik, out var existing))
+            if (!companiesByCik.TryGetValue(cik, out var company))
             {
-                existing.Tickers.Add(ticker);
+                company = new CompanyInfo { Cik = cik, Name = name ?? string.Empty };
+                companiesByCik[cik] = company;
             }
-            else
-            {
-                companiesByCik[cik] = new CompanyInfo
-                {
-                    Cik = cik,
-                    Name = name ?? string.Empty,
-                    Tickers = [ticker],
-                };
-            }
+            company.Tickers.Add(ticker);
+            if (exchange != null)
+                company.TickerExchanges.TryAdd(ticker, exchange);
         }
 
         return companiesByCik.Values.ToList();
@@ -1310,6 +1354,10 @@ public class SecEdgarClient : ISecEdgarClient
             Items =
                 i < recent.Items.Count && !string.IsNullOrWhiteSpace(recent.Items[i])
                     ? recent.Items[i]
+                    : null,
+            FileNumber =
+                i < recent.FileNumber.Count && !string.IsNullOrWhiteSpace(recent.FileNumber[i])
+                    ? recent.FileNumber[i].Trim()
                     : null,
         };
         return true;

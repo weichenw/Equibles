@@ -111,7 +111,7 @@ public class ProfilesController : BaseController
             {
                 Name = holder.Name,
                 Cik = holder.Cik,
-                Classification = holder.Classification,
+                HolderType = await _institutionalHolderRepository.GetEntityType(holder),
                 ConfidentialTreatmentRequested = holder.ConfidentialTreatmentRequested,
                 Location = ProfileFormatting.JoinLocation(holder.City, holder.StateOrCountry),
                 Holdings = holdings,
@@ -325,10 +325,10 @@ public class ProfilesController : BaseController
             foreach (var row in viewModel.Overlap.Rows)
             {
                 var heldBy = row.Slices.Count(s => s.Value > 0);
-                viewModel.FundsHoldingByStock[row.CommonStockId] = heldBy;
+                viewModel.FundsHoldingByStock[row] = heldBy;
             }
             viewModel.Overlap.Rows = viewModel
-                .Overlap.Rows.OrderByDescending(r => viewModel.FundsHoldingByStock[r.CommonStockId])
+                .Overlap.Rows.OrderByDescending(r => viewModel.FundsHoldingByStock[r])
                 .ThenByDescending(r => r.CombinedValue)
                 .ToList();
         }

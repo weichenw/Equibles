@@ -126,7 +126,11 @@ public class HoldingsScraperWorker : BaseScraperWorker
         // Before the walk, so a replay finds each stored position under its current label.
         await ConvergeHoldingLabels(stoppingToken);
 
-        await BackfillHolderClassifications(stoppingToken);
+        // A profile or link rule change must not wait for the walk, which a parser replay
+        // stretches to days; the stored records are enough to rebuild a set derived by an older
+        // rule. Profiles first, since the links read them.
+        await RefreshStaleHolderProfiles(stoppingToken);
+        await RefreshStaleHolderLinks(stoppingToken);
 
         var startDate = _workerOptions.MinSyncDate ?? new DateTime(2020, 1, 1);
         var minReportDate = DateOnly.FromDateTime(startDate);
@@ -182,6 +186,17 @@ public class HoldingsScraperWorker : BaseScraperWorker
         // Bulk files contain older captures than the live filings already in the store.
         // Reapply their later tail only after the entire oldest-first bulk pass has finished.
         await ApplyPendingRealtimeReplay(stoppingToken);
+
+        await BackfillHolderIdentity(stoppingToken);
+        await RefreshHolderFilerProfiles(stoppingToken);
+        // After the filer profiles, so the holder profiles read fresh SIC codes.
+        await RefreshHolderProfiles(stoppingToken);
+
+        await SyncForm13FNotices(fileNames, stoppingToken);
+        // After the notices, which name the managers that report for a filer that stopped.
+        await RefreshHolderSuccessions(stoppingToken);
+        // After the successions, which a parent link must never repeat.
+        await RefreshHolderLinks(stoppingToken);
 
         // Position coverage does not depend on valuation. Check it before maintenance can
         // spend the cycle repricing a large backlog, but let maintenance survive SEC outages.
@@ -288,6 +303,8 @@ public class HoldingsScraperWorker : BaseScraperWorker
         dataSets.Delete(pending);
         foreach (var row in realRows)
             dataSets.Delete(row);
+        // A resume checkpoint would keep the accessions it names under the old mapping.
+        await dataSets.ClearAllCommittedAccessions(cancellationToken);
         if (
             rows.All(r => r.FileName != Holdings.Data.Models.ProcessedDataSet.BackfillGuardFileName)
         )
@@ -505,7 +522,13 @@ public class HoldingsScraperWorker : BaseScraperWorker
     // Upsert rather than insert: after a parser-version bump the row already
     // exists at the old version (FileName is unique), so a blind Add would
     // collide on the unique index and the data set would re-import every cycle.
-    private async Task MarkAsProcessed(string fileName, int submissionCount)
+    // The resume checkpoint goes after the mark; a failure between them leaves rows the next
+    // import of this file discards.
+    internal async Task MarkAsProcessed(
+        string fileName,
+        int submissionCount,
+        CancellationToken cancellationToken
+    )
     {
         await using var scope = ScopeFactory.CreateAsyncScope();
         var repo = scope.ServiceProvider.GetRequiredService<ProcessedDataSetRepository>();
@@ -529,6 +552,7 @@ public class HoldingsScraperWorker : BaseScraperWorker
         }
 
         await repo.SaveChanges();
+        await repo.ClearCommittedAccessions(fileName, cancellationToken);
     }
 
     private async Task RecalculatePendingValues(CancellationToken cancellationToken)
@@ -623,6 +647,7 @@ public class HoldingsScraperWorker : BaseScraperWorker
                     archive,
                     minReportDate,
                     BulkBatchPause,
+                    fileName,
                     cancellationToken
                 );
 
@@ -653,7 +678,7 @@ public class HoldingsScraperWorker : BaseScraperWorker
                 {
                     try
                     {
-                        await MarkAsProcessed(fileName, result.SubmissionCount);
+                        await MarkAsProcessed(fileName, result.SubmissionCount, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -736,34 +761,135 @@ public class HoldingsScraperWorker : BaseScraperWorker
         return false;
     }
 
-    private async Task BackfillHolderClassifications(CancellationToken cancellationToken)
+    // Bounded per cycle so the one-off cover-page reads never crowd out the realtime 13F sweep,
+    // which shares the SEC rate limiter.
+    internal const int HolderIdentityBackfillPerCycle = 2000;
+
+    private async Task BackfillHolderIdentity(CancellationToken cancellationToken)
     {
-        await using var scope = ScopeFactory.CreateAsyncScope();
-        var repo = scope.ServiceProvider.GetRequiredService<InstitutionalHolderRepository>();
-
-        var unclassified = await repo.GetUnclassified().ToListAsync(cancellationToken);
-        if (unclassified.Count == 0)
-            return;
-
-        var classified = 0;
-        foreach (var holder in unclassified)
+        try
         {
-            var result = FundClassifierService.Classify(holder.Name);
-            if (result != FundClassification.Unknown)
-            {
-                holder.Classification = result;
-                classified++;
-            }
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<HolderIdentityBackfillService>()
+                .Run(HolderIdentityBackfillPerCycle, cancellationToken);
         }
-
-        if (classified > 0)
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
-            await repo.SaveChanges();
-            Logger.LogInformation(
-                "Backfilled fund classification for {Classified}/{Total} unclassified holders",
-                classified,
-                unclassified.Count
-            );
+            Logger.LogError(exception, "Holder identity backfill failed; retrying next cycle");
+        }
+    }
+
+    // Bounded per cycle because each data set is a full archive download.
+    internal const int Form13FNoticeDataSetsPerCycle = 8;
+
+    private async Task SyncForm13FNotices(
+        IReadOnlyCollection<string> fileNames,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<Form13FNoticeSyncService>()
+                .SyncMissing(fileNames, Form13FNoticeDataSetsPerCycle, cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogError(exception, "13F notice sync failed; retrying next cycle");
+        }
+    }
+
+    internal const int HolderFilerProfilesPerCycle = 2000;
+
+    private async Task RefreshHolderFilerProfiles(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<HolderFilerProfileRefreshService>()
+                .Run(HolderFilerProfilesPerCycle, cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogError(exception, "Holder EDGAR profile refresh failed; retrying next cycle");
+        }
+    }
+
+    private async Task RefreshHolderProfiles(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<HolderProfileRefreshService>()
+                .Run(DateOnly.FromDateTime(DateTime.UtcNow), cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogError(exception, "Holder profile refresh failed; retrying next cycle");
+        }
+    }
+
+    private async Task RefreshHolderLinks(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<HolderLinkRefreshService>()
+                .Run(DateOnly.FromDateTime(DateTime.UtcNow), cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogError(exception, "Holder link refresh failed; retrying next cycle");
+        }
+    }
+
+    private async Task RefreshStaleHolderProfiles(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<HolderProfileRefreshService>()
+                .RunIfStale(DateOnly.FromDateTime(DateTime.UtcNow), cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogError(exception, "Stale holder profile refresh failed; retrying next cycle");
+        }
+    }
+
+    private async Task RefreshStaleHolderLinks(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<HolderLinkRefreshService>()
+                .RunIfStale(DateOnly.FromDateTime(DateTime.UtcNow), cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogError(exception, "Stale holder link refresh failed; retrying next cycle");
+        }
+    }
+
+    private async Task RefreshHolderSuccessions(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            await scope
+                .ServiceProvider.GetRequiredService<HolderSuccessionRefreshService>()
+                .Run(DateOnly.FromDateTime(DateTime.UtcNow), cancellationToken);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            Logger.LogError(exception, "Holder succession refresh failed; retrying next cycle");
         }
     }
 }

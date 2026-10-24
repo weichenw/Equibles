@@ -11,7 +11,7 @@ namespace Equibles.Holdings.HostedService.Services;
 
 /// <summary>
 /// Parses the raw <c>primary_doc.xml</c> of a single Schedule 13D or 13G filing
-/// (beneficial-ownership reports, machine-readable XML since 2024-12-18).
+/// (beneficial-ownership reports, machine-readable XML since 2023-12-18).
 ///
 /// The two forms share a namespace family but differ in element names — 13D uses
 /// <c>dateOfEvent</c>, <c>issuerCUSIP</c>, repeated <c>reportingPersonInfo</c>
@@ -81,6 +81,11 @@ public class Filing13DGXmlParser
         foreach (var person in personElements)
             filing.ReportingPersons.Add(ParseReportingPerson(person));
 
+        filing.RuleDesignations = Values(root, "designateRulePursuantThisScheduleFiled");
+        // Item 3's checked categories. Its otherTypeOfPersonFiling is the free-text "type of
+        // institution" line, never a code, even when a filer writes one there.
+        filing.FilingPersonTypeCodes = Codes(Descendants(root, "typeOfPersonFiling"));
+
         return filing;
     }
 
@@ -134,7 +139,7 @@ public class Filing13DGXmlParser
                 )
             ),
             PercentOfClass = ParsePercent(FirstValue(person, "percentOfClass", "classPercent")),
-            TypeOfReportingPerson = Value(Descendant(person, "typeOfReportingPerson")),
+            TypeCodes = Codes(Descendants(person, "typeOfReportingPerson")),
             CitizenshipOrOrganization = Value(Descendant(person, "citizenshipOrOrganization")),
         };
     }
@@ -160,6 +165,26 @@ public class Filing13DGXmlParser
         parent == null ? null : Children(parent, localName).FirstOrDefault();
 
     private static string Value(XElement element) => element?.Value.Trim();
+
+    private static List<string> Values(XElement parent, string localName) =>
+        Descendants(parent, localName)
+            .Select(Value)
+            .Where(value => !string.IsNullOrEmpty(value))
+            .ToList();
+
+    // One element normally holds one code, but a filer may list several in one, so split on
+    // separators and keep each code once in filed order.
+    private static List<string> Codes(IEnumerable<XElement> elements) =>
+        elements
+            .SelectMany(element =>
+                (element.Value ?? "").Split(
+                    [',', ';', ' ', '\t', '\r', '\n'],
+                    StringSplitOptions.RemoveEmptyEntries
+                )
+            )
+            .Select(code => code.ToUpperInvariant())
+            .Distinct()
+            .ToList();
 
     /// <summary>First non-empty descendant value among the candidate local names.</summary>
     private static string FirstValue(XElement parent, params string[] localNames)

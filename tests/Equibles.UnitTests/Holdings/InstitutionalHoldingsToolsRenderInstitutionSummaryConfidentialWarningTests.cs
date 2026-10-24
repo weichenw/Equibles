@@ -47,6 +47,9 @@ public class InstitutionalHoldingsToolsRenderInstitutionSummaryConfidentialWarni
                     (DateOnly?)new DateOnly(2024, 6, 30),
                     summary,
                     null,
+                    null,
+                    null,
+                    null,
                 ]
             );
 

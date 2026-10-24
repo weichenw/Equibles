@@ -8,6 +8,7 @@
 - A legacy source key proves only its existing identity; migrated securities remain `Unknown` and listings remain `Legacy` with unknown MIC, currency and quote scale.
 - Null and empty-string ticker sentinels remain unattributed and are excluded from listing registration and audit expectations; their original rows and values are retained.
 - Unattributed issuer-level rows stay issuer-level; never assign an old ambiguous price, split or holding to today's primary ticker.
+- An unattributed split blocks a history replacement unless the series is a venue listing whose own capture or chart states the same event (same ratio, same-event window).
 - A verified listing requires source evidence, MIC, currency and positive quote scale; legacy migration does not grant verification or international publication.
 - Historical symbols and reused tickers keep separate source keys and listing IDs; one symbol never merges different issuers.
 - Database writer guards synchronize issuer changes and register newly observed exact historical series from EF, bulk imports and retiring binaries.
@@ -108,7 +109,7 @@
 - Every catalog market with a directory adapter is captured; there is no per-market switch. `EquityMarketDirectoryWorker` runs each such market's directory pass within a minute of start-up, once `FirdsUniverseWorker` has stored a full set for the market's authority, and again once a day.
 - Prices, quotation evidence and corporate actions are captured for every verified listing on a catalog market. An instrument without an ISIN also requires paired security/listing identifiers from the same authoritative directory; price writes bind its immutable security ID.
 - Catalog daily-price imports admit a session thirty minutes after the later of its configured continuous close and closing-auction end, in the venue's timezone. Forward imports and complete history replacements use the same exclusive date cutoff; US and retired-series rules remain unchanged. A returned bar is still required, so weekends and holidays never create observations.
-- Catalog prices run independently from US corporate-action recovery in batches of at most 200 attempted listings. Persisted attempt times rotate unfinished work across restarts; four recently trading listings alternate with one backfill when both groups have work. Recent series retry after five minutes and dormant or unpriced series after one hour. Existing provider pacing and identity/write guards still apply.
+- Catalog prices run independently from US corporate-action recovery in batches of at most 200 attempted listings. Persisted attempt times rotate unfinished work across restarts; four recently trading listings alternate with one backfill when both groups have work. Recent series retry after five minutes, dormant series after one hour, and series Yahoo has never priced after one day. Existing provider pacing and identity/write guards still apply.
 - Catalog enrichment runs after price batches finish; the US worker retains global corporate-action reconciliation and excludes duplicate catalog forward imports.
 - US enrichment runs on its own five-minute `YahooUsEnrichmentWorker`, never behind the US price pass, so market caps refresh even when restarts outpace a complete pass; it shares the provider limiter.
 - Shanghai, Shenzhen and Hong Kong have quotation metadata in the catalog; their official directories are supplied by the host rather than FIRDS. Catalog registration alone creates no active listings. Hong Kong requires its canonical five-digit numeric exchange code before converting to the provider’s four-digit minimum width; alternate spellings are ineligible, so two source tickers cannot normalize to one price symbol.
@@ -138,6 +139,6 @@
 - Both generations serialize on native issuer locks; original position IDs, source facts and attribution IDs remain intact through replay and final storage retirement.
 
 - Each catalog price batch reserves at most 25 due enrichment attempts, even when price retries replenish the queue.
-- Within each market's recent-price queue, listings missing a settled close precede already-current series; oldest-attempt ordering still rotates each group across restarts.
+- Recent-price listings never asked for their newest settled close precede retries, which precede already-current series; each tier rotates across markets and keeps oldest-attempt ordering across restarts.
 - A newer venue-owned bar permits the longer fallback interval only while it covers the latest settled date; stale venue coverage resumes from its last observation through the normal resettle window.
 - A non-US history replacement refuses a response whose settlement cutoff predates an already stored session; the next reconciliation fetches a complete current basis.

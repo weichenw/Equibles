@@ -67,21 +67,48 @@ public class MarketActivityShareRestater
                     $"Cannot restate holdings activity for {primaryTicker} without listing-share snapshots."
                 );
 
-            row.CurrentShares = RestateListingTotal(
-                row.ListingShares,
-                listing => listing.CurrentShares,
-                currentReportDate,
-                primaryTicker,
-                splits
-            );
-            row.PreviousShares = RestateListingTotal(
-                row.ListingShares,
-                listing => listing.PreviousShares,
-                previousReportDate,
-                primaryTicker,
-                splits
-            );
+            RestateRow(row, currentReportDate, previousReportDate, primaryTicker, splits);
         }
+    }
+
+    // The unmatched parts restate on the same bases as the totals, so the matched delta stays a
+    // difference of like-for-like share counts.
+    internal static void RestateRow(
+        MarketWideStockActivity row,
+        DateOnly currentReportDate,
+        DateOnly previousReportDate,
+        string primaryTicker,
+        IReadOnlyList<StockSplit> splits
+    )
+    {
+        row.CurrentShares = RestateListingTotal(
+            row.ListingShares,
+            listing => listing.CurrentShares,
+            currentReportDate,
+            primaryTicker,
+            splits
+        );
+        row.PreviousShares = RestateListingTotal(
+            row.ListingShares,
+            listing => listing.PreviousShares,
+            previousReportDate,
+            primaryTicker,
+            splits
+        );
+        row.UnmatchedCurrentShares = RestateListingTotal(
+            row.ListingShares,
+            listing => listing.UnmatchedCurrentShares,
+            currentReportDate,
+            primaryTicker,
+            splits
+        );
+        row.UnmatchedPreviousShares = RestateListingTotal(
+            row.ListingShares,
+            listing => listing.UnmatchedPreviousShares,
+            previousReportDate,
+            primaryTicker,
+            splits
+        );
     }
 
     public async Task RestateStockActivity(
@@ -93,10 +120,7 @@ public class MarketActivityShareRestater
         if (activity.Count == 0)
             return;
 
-        var splits = await _stockSplitRepository
-            .GetEffectiveByStock(stock.Id, DateOnly.FromDateTime(DateTime.UtcNow))
-            .AsNoTracking()
-            .ToListAsync(cancellationToken);
+        var splits = await EffectiveSplits(stock, cancellationToken);
         if (splits.Count == 0)
             return;
 
@@ -125,6 +149,17 @@ public class MarketActivityShareRestater
                 : 0;
         }
     }
+
+    // The splits RestateStockActivity applies, for callers that restate holder-level shares
+    // beside those totals.
+    public Task<List<StockSplit>> EffectiveSplits(
+        EquityIssuer stock,
+        CancellationToken cancellationToken = default
+    ) =>
+        _stockSplitRepository
+            .GetEffectiveByStock(stock.Id, DateOnly.FromDateTime(DateTime.UtcNow))
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
 
     internal static long RestateListingTotal(
         IReadOnlyList<StockQuarterlyListingActivity> listingShares,

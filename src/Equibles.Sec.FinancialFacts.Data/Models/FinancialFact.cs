@@ -9,17 +9,18 @@ namespace Equibles.Sec.FinancialFacts.Data.Models;
 
 /// <summary>
 /// A single structured financial fact (one concept, one period, one unit) for a
-/// company, sourced from SEC's Company Facts API. Restatements are retained as
+/// company, sourced from SEC's Company Facts API or a filing's own XBRL
+/// (<see cref="Source"/>). Restatements are retained as
 /// separate rows discriminated by <see cref="AccessionNumber"/>; the
 /// most-recently-reported value for a period is the one with the latest
 /// <see cref="FiledDate"/>.
 /// </summary>
-[Index(nameof(EquityIssuerId), nameof(FinancialConceptId), nameof(PeriodEnd))]
-// Concept-first twin of the index above, for the queries that ask about a concept across ALL
-// companies ("has this concept any fact since <date>?"). The company-first index cannot serve
-// those: with CommonStockId unconstrained Postgres restarts the search once per distinct stock,
-// which measured 42.6M index searches and 32s for a single 4,038-concept batch of the concept
-// curation lane. Leading with FinancialConceptId makes each probe one range scan.
+// Concept-first twin of the issuer-first covering index (FinancialFactsModuleConfiguration), for the
+// queries that ask about a concept across ALL companies ("has this concept any fact since <date>?").
+// The issuer-first index cannot serve those: with the issuer unconstrained Postgres restarts the
+// search once per distinct stock, which measured 42.6M index searches and 32s for a single
+// 4,038-concept batch of the concept curation lane. Leading with FinancialConceptId makes each probe
+// one range scan.
 [Index(nameof(FinancialConceptId), nameof(PeriodEnd))]
 [Index(nameof(EquityIssuerId), nameof(FiscalYear), nameof(FiscalPeriod))]
 [Index(nameof(DocumentId))]
@@ -110,6 +111,12 @@ public class FinancialFact
     [MaxLength(64)]
     public string DimensionsKey { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The lane that last wrote this row. Lets a Company Facts import delete the 10-Q/10-K
+    /// consolidated fills it superseded without touching extension or dimensional rows.
+    /// </summary>
+    public FinancialFactSource Source { get; set; }
+
     public DateTime CreationTime { get; set; } = DateTime.UtcNow;
 
     /// <summary>
@@ -142,5 +149,6 @@ public class FinancialFact
             AccessionNumber = AccessionNumber,
             Frame = Frame,
             DimensionsKey = DimensionsKey,
+            Source = Source,
         };
 }

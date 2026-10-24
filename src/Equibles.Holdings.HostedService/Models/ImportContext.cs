@@ -20,6 +20,10 @@ public class ImportContext
     public TimeSpan BatchPause { get; init; }
     internal Parsed13FFiling ConfirmedZeroRestatement { get; init; }
 
+    // Set only for a bulk data set import, which records each committed accession so a restart
+    // resumes after it.
+    internal DataSetCheckpoint Checkpoint { get; set; }
+
     // Populated by phases
     public Dictionary<string, SubmissionRow> Submissions { get; set; }
     public Dictionary<string, CoverPageRow> CoverPages { get; set; }
@@ -64,6 +68,13 @@ public class ImportContext
     // a stale symbol after a primary rename (unknown basis — the row stays pending).
     public Dictionary<Guid, List<string>> SecondaryTickers { get; set; } = [];
 
+    // CommonStockId → listed ticker → SEC fund series id. A split of another series of the same
+    // trust cannot move a position's count (see RegisteredSeriesTickers).
+    public Dictionary<
+        Guid,
+        IReadOnlyDictionary<string, string>
+    > RegisteredSeriesByTicker { get; set; } = [];
+
     // Issuer size: CommonStockId → (shares outstanding, market capitalization). Used only to
     // reject a position larger than the company it is in (ImpossiblePositionGuard); a stock
     // missing here is simply not judged.
@@ -106,3 +117,16 @@ public class ImportContext
     // Accessions whose rows outside their period of report were already swept this import.
     public HashSet<string> PeriodSweptAccessions { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
+
+/// <summary>
+/// Where a bulk data set import records committed accessions, and the ones an earlier,
+/// interrupted import of the same archive committed. <see cref="Committed"/> is read once before
+/// the walk, trimmed to each book's leading run of recorded filings, and never grows, so an
+/// accession whose rows arrive in a second segment still flushes.
+/// </summary>
+internal sealed record DataSetCheckpoint(
+    string FileName,
+    int ParserVersion,
+    string ArchiveFingerprint,
+    IReadOnlySet<string> Committed
+);

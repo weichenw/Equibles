@@ -71,6 +71,18 @@ public class SecModuleConfiguration : Equibles.Data.IFinancialModule
         builder.Entity<FailedFilingIngest>();
         builder.Entity<EsefOversizedReport>();
         builder.Entity<FormAdvAdviser>();
+        builder.Entity<FormAdvAdviserClientType>();
+        builder.Entity<FormAdvRosterImport>();
+        builder.Entity<FormAdvAdviserVersion>();
+        builder
+            .Entity<FormAdvClientTypeAum>()
+            .HasOne(row => row.FormAdvAdviserVersion)
+            .WithMany(version => version.ClientTypes)
+            .HasForeignKey(row => row.FormAdvAdviserVersionId)
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.Entity<FormAdvPrivateFundFiling>();
+        builder.Entity<FormAdvFilingArchiveImport>();
+        builder.Entity<SecFilerProfile>();
         builder
             .Entity<FormDFiling>()
             .HasOne(row => row.Issuer)
@@ -95,6 +107,12 @@ public class SecModuleConfiguration : Equibles.Data.IFinancialModule
             .HasForeignKey(row => row.EquityIssuerId)
             .OnDelete(DeleteBehavior.Restrict);
         builder.Entity<NCenServiceProvider>();
+        builder.Entity<NCenDataSetImport>();
+        builder.Entity<NCenRegistrantReport>();
+        builder.Entity<NCenFundReport>();
+        builder.Entity<NCenFundAdviser>();
+        builder.Entity<NCenFundShareClass>();
+        builder.Entity<NCenFundExchangeListing>();
         builder.Entity<NportFiling>(b =>
         {
             b.HasOne(row => row.Issuer)

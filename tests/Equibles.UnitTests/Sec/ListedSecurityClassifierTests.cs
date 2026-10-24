@@ -47,6 +47,24 @@ public class ListedSecurityClassifierTests
     // Exchange-traded debt — the QVC baby-bond shape.
     [InlineData("6.875% Senior Secured Notes due 2068", ListedSecurityType.DebtSecurities)]
     [InlineData("8.00% Subordinated Debentures due 2032", ListedSecurityType.DebtSecurities)]
+    // Exchange-traded notes: the filed abbreviation is the head noun, and a "Shares" inside the
+    // product name is not a common-equity keyword.
+    [InlineData(
+        "Credit Suisse X-Links® Gold Shares Covered Call ETNs due February 2, 2033",
+        ListedSecurityType.DebtSecurities
+    )]
+    [InlineData("iPath® Select MLP ETN", ListedSecurityType.DebtSecurities)]
+    [InlineData(
+        "DB Gold Double Long Exchange Traded Notes due February 15, 2038",
+        ListedSecurityType.DebtSecurities
+    )]
+    // Near misses: the letters inside a word, and equity titles that only mention exchanges.
+    [InlineData("Vietnam Enterprise Investments Ordinary Shares", ListedSecurityType.CommonShares)]
+    [InlineData(
+        "Common Shares of Beneficial Interest of an Exchange Traded Fund",
+        ListedSecurityType.CommonShares
+    )]
+    [InlineData("Betnet Holdings Capital Stock", ListedSecurityType.Other)]
     // Wrappers lead with their own noun whatever they embed.
     [InlineData(
         "Units, each consisting of one share of Class A Common Stock and one-half of one redeemable Warrant",
@@ -71,6 +89,16 @@ public class ListedSecurityClassifierTests
         "Common Stock, par value $0.01 per share, together with the associated Preferred Stock Purchase Rights",
         ListedSecurityType.CommonShares
     )]
+    [InlineData(
+        "Common Stock, $0.01 par value including the Preferred Stock Purchase Rights",
+        ListedSecurityType.CommonShares
+    )]
+    [InlineData(
+        "Shares of common stock, $0.01 par value per share,including the preferred stock purchase rights",
+        ListedSecurityType.CommonShares
+    )]
+    // A rights listing in its own row still classifies Rights.
+    [InlineData("Rights to purchase Common Shares, no par value", ListedSecurityType.Rights)]
     // MLP and fund units both classify Units; surfaces deliberately keep them.
     [InlineData("Common Units Representing Limited Partner Interests", ListedSecurityType.Units)]
     [InlineData("Units Representing Limited Partnership Interests", ListedSecurityType.Units)]

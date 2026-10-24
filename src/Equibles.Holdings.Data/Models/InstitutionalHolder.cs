@@ -5,7 +5,6 @@ namespace Equibles.Holdings.Data.Models;
 
 [Index(nameof(Cik), IsUnique = true)]
 [Index(nameof(Name))]
-[Index(nameof(Classification))]
 public class InstitutionalHolder
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -28,7 +27,16 @@ public class InstitutionalHolder
     [MaxLength(32)]
     public string CrdNumber { get; set; }
 
-    public FundClassification Classification { get; set; }
+    /// <summary>The filer's own SEC file number (801- for a registered adviser) from its cover page.</summary>
+    [MaxLength(32)]
+    public string SecFileNumber { get; set; }
+
+    /// <summary>
+    /// Accession of the 13F cover page last applied to the identity numbers above (a blank number
+    /// there keeps the stored one); null until a cover has been applied since the column existed.
+    /// </summary>
+    [MaxLength(32)]
+    public string IdentityAccession { get; set; }
 
     public bool ConfidentialTreatmentRequested { get; set; }
 

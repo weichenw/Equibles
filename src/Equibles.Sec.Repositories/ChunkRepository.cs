@@ -19,8 +19,17 @@ public class ChunkRepository : BaseRepository<Chunk>
     private const int HybridSearchCommandTimeoutSeconds = 5;
     private const int ScopedFallbackCommandTimeoutSeconds = 3;
 
+    private readonly int _maximumCandidateCount = ChunkRankedScope.MaximumCandidateCount;
+
     public ChunkRepository(EquiblesFinancialDbContext dbContext)
         : base(dbContext) { }
+
+    // A lower ranked-prefix ceiling lets an integration test exhaust the candidate budget cheaply.
+    internal ChunkRepository(EquiblesFinancialDbContext dbContext, int maximumCandidateCount)
+        : base(dbContext)
+    {
+        _maximumCandidateCount = maximumCandidateCount;
+    }
 
     // virtual: unit tests stub the search seam by subclassing (no BM25 index in a unit run).
     // commandTimeoutSeconds overrides the default statement budget for this one call — the
@@ -147,6 +156,7 @@ public class ChunkRepository : BaseRepository<Chunk>
         var originalTimeout = DbContext.Database.GetCommandTimeout();
         DbContext.Database.SetCommandTimeout(timeoutSeconds);
         var stopwatch = Stopwatch.StartNew();
+        var progress = new ChunkRankedProgress();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
         try
@@ -196,19 +206,19 @@ public class ChunkRepository : BaseRepository<Chunk>
             var query = DbContext
                 .Set<Chunk>()
                 .Where(c => EF.Functions.JsonSearch(c.Id, searchQuery));
-            return await LeaderOnlyScan(
-                scan =>
-                    ChunkRankedScope.Read(
-                        DbContext,
-                        query,
-                        maxResults,
-                        ticker,
-                        startDate,
-                        endDate,
-                        stopwatch,
-                        timeoutSeconds,
-                        scan
-                    ),
+            // Parallel workers are allowed: pg_search 0.25.11 fixed the server crash when a
+            // cancelled search's leader terminates its workers mid-scan.
+            return await ChunkRankedScope.Read(
+                DbContext,
+                query,
+                maxResults,
+                ticker,
+                startDate,
+                endDate,
+                stopwatch,
+                timeoutSeconds,
+                progress,
+                _maximumCandidateCount,
                 deadline.Token
             );
         }
@@ -217,7 +227,8 @@ public class ChunkRepository : BaseRepository<Chunk>
         {
             throw new ChunkSearchTimeoutException(
                 $"BM25 chunk search exceeded its {timeoutSeconds}s statement budget.",
-                exception
+                exception,
+                progress.Validated
             );
         }
         catch (Exception exception)
@@ -233,51 +244,14 @@ public class ChunkRepository : BaseRepository<Chunk>
             // never conflated with "no matches".
             throw new ChunkSearchTimeoutException(
                 $"BM25 chunk search exceeded its {timeoutSeconds}s statement budget.",
-                exception
+                exception,
+                progress.Validated
             );
         }
         finally
         {
             DbContext.Database.SetCommandTimeout(originalTimeout);
         }
-    }
-
-    public const string LeaderOnlyScanSql = "SET LOCAL max_parallel_workers_per_gather = 0";
-
-    // Runs one @@@ statement on the leader alone: a pg_search parallel worker that aborts
-    // crash-restarts the whole Postgres, and a scoped search's semi-join bypasses
-    // paradedb.min_rows_per_worker. The owned transaction goes through the context's execution
-    // strategy because a retrying strategy refuses a user-initiated one, and it rolls back so
-    // SET LOCAL reverts; inside a caller's transaction the setting lasts until that one ends.
-    // The scan must materialize before it returns, because the transaction ends with the call.
-    public virtual async Task<T> LeaderOnlyScan<T>(
-        Func<CancellationToken, Task<T>> scan,
-        CancellationToken cancellationToken = default
-    )
-    {
-        if (DbContext == null || !DbContext.Database.IsNpgsql())
-            return await scan(cancellationToken);
-        if (DbContext.Database.CurrentTransaction != null)
-        {
-            await DbContext.Database.ExecuteSqlRawAsync(LeaderOnlyScanSql, cancellationToken);
-            return await scan(cancellationToken);
-        }
-
-        var strategy = DbContext.Database.CreateExecutionStrategy();
-        return await strategy.ExecuteAsync(
-            async operationCancellationToken =>
-            {
-                await using var transaction = await DbContext.Database.BeginTransactionAsync(
-                    operationCancellationToken
-                );
-                await DbContext.Database.ExecuteSqlRawAsync(
-                    LeaderOnlyScanSql,
-                    operationCancellationToken
-                );
-                return await scan(operationCancellationToken);
-            },
-            cancellationToken
-        );
     }
 
     // Bounded degrade for a SCOPED search whose ParadeDB pass timed out. A ticker or a document id

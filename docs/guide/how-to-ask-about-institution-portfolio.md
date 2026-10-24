@@ -16,12 +16,13 @@ Name the fund and what you want to know:
 - "What's Renaissance Technologies' sector allocation?"
 - "What did Citadel buy and sell last quarter?"
 
-If the name is ambiguous, the assistant first calls `SearchInstitutions`. Discovery tries all name tokens first and broadens to any token only when no strict row matches; its rows include SEC CIK, latest report date, reported 13F AUM, tracked position count, and location. Separate CIKs can represent current, predecessor, or otherwise distinct registrants, so compare the dates and use the intended CIK. Institution-scoped tools never use the broad fallback: they accept a unique strict partial or verified flagship alias, but reject ambiguity instead of selecting silently.
+If the name is ambiguous, the assistant first calls `SearchInstitutions`. Discovery tries all name tokens first and broadens to any token only when no strict row matches; its rows include SEC CIK, latest report date, reported 13F AUM, tracked position count, location, and holder type (registered adviser, bank, insurer and so on, read from regulatory records, never the name). Separate CIKs can represent current, predecessor, or otherwise distinct registrants, so compare the dates and use the intended CIK. Institution-scoped tools never use the broad fallback: they accept a unique strict partial or verified flagship alias, but reject ambiguity instead of selecting silently.
 
 ## What you should see
 
 - **`GetInstitutionPortfolio`** — the fund's holdings: each tracked stock with share count and market value.
-- **`GetInstitutionSummary`** — a header with reported AUM, position count, top-10 / top-25 concentration, quarter-over-quarter turnover, and the latest and prior report dates. Good for "how big and how concentrated is this fund?"
+- **`GetInstitutionSummary`** — a header with reported AUM, position count, top-10 / top-25 concentration, quarter-over-quarter turnover, and the latest and prior report dates, then a holder profile: its type and the record that decided it, Form ADV facts such as regulatory assets, client base and private funds, the parent 13F filer that reports its holdings, and any earlier or later CIK its 13F reports continue under, then its measured style (index-like, systematic-like, concentrated or diversified active), turnover and holding horizon. Good for "how big and how concentrated is this fund?" and "what kind of firm is this?"
+- **`GetInstitutionStyleHistory`** — the same style, turnover and horizon bands quarter by quarter, with the measurements behind each. Good for "has this fund become more index-like?" and "how long does this fund hold its positions?"
 - **`GetInstitutionSectorAllocation`** — holdings grouped by industry/sector and sorted by percentage of the portfolio. Good for "is this fund a tech specialist or a generalist?"
 - **`GetInstitutionQuarterlyActivity`** — the stocks the fund initiated, increased, reduced, or exited versus the prior quarter, sorted by the size of the change.
 

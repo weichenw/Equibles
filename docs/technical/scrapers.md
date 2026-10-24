@@ -148,6 +148,14 @@ The two SEC Financial Facts workers each keep their own ledger.
   - A set over `SecDocumentEnvelopeParser.MaxInlineDocumentSetBytes` (the fact parser's 50 MB ceiling) keeps only its primary.
 - [`XbrlDocumentSetRecaptureWorker`](../../src/Equibles.Sec.HostedService/XbrlDocumentSetRecaptureWorker.cs) is a finite repair: periodic filings captured before 2026-10-15 whose facts carry no currency unit are re-read from EDGAR once, original 10-K, 20-F and 40-F reports first and then newest first; a capture that grew replaces the stored envelope and resets `XbrlFactsVersion`, and every finished re-read stamps `XbrlCaptureAttempts` at its ceiling, while a failed one counts one attempt. Retire it once `XbrlDocumentSetRecaptureService.Pending()` is empty in production.
 - Foreign annual and interim reports also fill missing standard consolidated facts from captured XBRL. Recovery requires an unqualified matching SEC CIK context and the official financial taxonomy namespace; duplicate context IDs and conflicting values are refused. Inserts never update an existing Company Facts natural key. Version 6 replays foreign reports only; unchanged domestic version-5 captures do not repeat their parsing work.
+- SEC sometimes never processes a filing into Company Facts (CHEF's Q2 FY2026 10-Q, accession `0001517175-26-000028`, carried no Company Facts row months after filing). A 10-Q/10-K whose accession has no consolidated standard Company Facts row fills its consolidated facts from captured XBRL the same way, tagged `FinancialFact.Source = FilingXbrl`.
+  - Only periods the fiscal calendar resolves are filled; the calendar-quarter fallback is never used for them. The context's CIK may be the issuer's primary or any secondary CIK (foreign fills too).
+  - Steady state: extraction usually runs before Company Facts picks a new filing up, so most fresh 10-Q/10-Ks are filled first and taken over within a day; only a filing SEC never processes keeps its fills.
+  - The next Company Facts import that emits the accession re-stamps the rows it states as `CompanyFacts` and deletes the fills it does not state, even when its watermark would otherwise skip the cycle. Extension, dimensional and foreign-form rows are untouched.
+  - If Company Facts lands while a document is being filled, the extractor withdraws its fills itself; the partial index `IX_FinancialFact_FilingXbrlFill` keeps these probes cheap.
+  - Fills bypass `FinancialFactImportQualityFilter` until Company Facts takes over.
+  - Version 9 is a targeted replay: documents at version 8 rerun only when they are 10-Q/10-K filings filed since 2026-01-01 or newer than their issuer's `LastFiledDateSeen`, which includes every 10-Q/10-K of an issuer Company Facts never covered (`XbrlFactExtractionService.TargetedReplayFloor`). Foreign documents are not replayed, so the secondary-CIK fill reaches them only when they rerun for another reason. The next full-corpus bump raises the floor to the new version and retires the replay.
+  - `Source` is reliable only for rows written after the column was added: older rows default to `CompanyFacts`, which the gate and the cleanup never misread because both consider only consolidated, non-extension rows on a 10-Q/10-K accession.
 
 ### FTD / FINRA / FRED / Yahoo / CFTC / CBOE — "latest date" cursor
 
@@ -158,7 +166,8 @@ These sources publish a continuous time series rather than discrete filings. Eac
 
 The cursor pattern means re-running is cheap (a single query for `max(date)` per cycle); duplicate ingestion is prevented by the per-source unique index (`[Index(nameof(CommonStockId), nameof(Date), IsUnique = true)]` etc.).
 
-- Catalog prices rotate across venue identities inside both the recent-price and historical queues; a larger market cannot fill each bounded request batch ahead of smaller markets.
+- Recent catalog prices run in three tiers: a settled session not yet asked for since it closed (or a venue-covered listing due its interval fetch), then retries of a session already asked for, then current series. Each tier rotates across venue identities, and so does the historical queue, so a larger market cannot fill a tier ahead of smaller markets, and a retry never outranks another market's unasked session.
+- A catalog listing whose missing days are only a weekend fetches nothing; every catalog venue trades Monday to Friday.
 - Each venue retains oldest-attempt ordering across restarts, with four recent-price candidates per historical candidate and unchanged retry intervals.
 
 ### FDA catalysts — watermark-less re-read + upsert
@@ -168,12 +177,18 @@ The cursor pattern means re-running is cheap (a single query for `max(date)` per
 - [`FdaAdvisoryCommitteeCalendarImportService`](../../src/Equibles.FdaCatalysts.HostedService/Services/FdaAdvisoryCommitteeCalendarImportService.cs) parses the calendar, then upserts each meeting by its stable per-meeting slug (`FdaCatalyst.SourceReference`): an existing row refreshes its mutable fields, a new meeting inserts.
 - The calendar is mutable — scheduled dates and venues shift before a meeting happens — so a `max(date)` cursor would skip edits to already-stored meetings. Re-reading every cycle keeps stored rows in sync.
 
-### Government contracts — windowed scan with unique-key dedup
+### Government contracts — checkpointed windowed scan with parent fallback
 
-[`GovernmentContractsImportService`](../../src/Equibles.GovernmentContracts.HostedService/Services/GovernmentContractsImportService.cs) resumes from a `SyncDateResolver` watermark like the cursor scrapers above (`max(ActionDate)`), but USAspending requires a bounded date range per request, so it walks forward from that start date in `WindowDays`-sized chunks.
+[`GovernmentContractsImportService`](../../src/Equibles.GovernmentContracts.HostedService/Services/GovernmentContractsImportService.cs) walks USAspending in `WindowDays`-sized action-date windows (default 1 day), because the API requires a bounded range per request.
 
-- Awards back-fill into past dates, so a monotonic cursor alone would re-import already-stored rows. Each window's mapped awards are de-duplicated against `LoadExistingKeys` by `AwardUniqueKey` before persistence — only genuinely new awards insert.
-- A transient transport failure aborts the scan and records one error; the next run resumes from the same watermark. Window-specific failures fall through so the remaining windows still process.
+- A persisted checkpoint (`GovernmentContractsScanState.LastCompletedWindowEnd`) records the contiguous fully-scanned frontier. It advances only while every window this cycle has succeeded; the first failed window pulls it back behind that window.
+- Each cycle resumes the day after the frontier, but never later than a trailing `RescanLookbackDays` window (default 7), so awards USAspending publishes late are still picked up. Without a checkpoint the start falls back to `SyncDateResolver` over `max(ActionDate)`. Every start is clamped to the 2007-10-01 epoch.
+- Re-scanned awards de-duplicate against `LoadExistingKeys` by `AwardUniqueKey`, so only new awards insert.
+- A 422 rejects only that window: it is reported and stepped over. Any other HTTP failure, or five consecutive window failures, aborts the cycle for the worker to back off.
+- Unmatched awards are dropped, not stored. When the stored `MatchingVersion` is older than `RecipientMatchingVersion`, the next cycle pulls the checkpoint back to the epoch once so improved matching reaches history. Crossing version 3 also purges cached parentless answers so they are re-fetched.
+- A recipient whose name matches no company gets one retry through its SAM parent from the recipient profile. The current parent and the `parents[]` history are grouped by registrant (DUNS, then UEI, then hash), and only a single registrant resolves; every name it has carried is tried by exact match.
+- Entries naming the recipient itself (its own DUNS or UEI) are dropped when the current parent is a different registrant, since SAM records such eras during the owner's tenure. A subsidiary's pre-acquisition awards may therefore link to its current owner, as in USAspending's own roll-up.
+- Parent answers cache in `GovernmentContractRecipientParent`, including "no usable parent". Readings stay fresh for 180 days; rows recording a failed profile fetch retry after 7 days. More than three failed profile fetches in one window fail the window instead of caching.
 
 ### Congress — fixed-window re-scan across both chambers
 
@@ -183,6 +198,19 @@ The two congressional scrapers re-read a fixed recent window every cycle instead
 - One older chamber/year partition is replayed per cycle, newest missing year first down to the STOCK Act start in 2012. `CongressionalTradeImportPartition` is written only after the source index and every recordable filing complete, and stores the parser version so a later parser can reopen every year. Unavailable or malformed archives retry instead of becoming false empty years.
 - `CongressionalFilingRecord.ParserVersion` replays filings after parser changes. The trade parser retains the filed instrument type and account/subholding, and treats a lone standard range floor as that disclosure bracket rather than as a zero-based band.
 - [`CongressionalAnnualDisclosureSyncService`](../../src/Equibles.Congress.HostedService/Services/CongressionalAnnualDisclosureSyncService.cs) re-reads annual financial disclosures across a span of coverage years (House per year, Senate by submitted date) and upserts each report by its stable key, so a late amendment refreshes the stored row rather than inserting a duplicate.
+
+### Congress legislators: full roster snapshot
+
+- [`CongressLegislatorSyncWorker`](../../src/Equibles.Congress.HostedService/CongressLegislatorSyncWorker.cs) runs weekly. [`CongressLegislatorSyncService`](../../src/Equibles.Congress.HostedService/Services/CongressLegislatorSyncService.cs) reads the public [congress-legislators](https://github.com/unitedstates/congress-legislators) roster (CC0), `legislators-current.json` and `legislators-historical.json`; the current file wins a BioGuide id both list.
+- Only legislators with a term ending on or after 2012-01-01 are kept. `CongressLegislator` holds the name; `CongressMemberTerm` holds one row per chamber term and party, half-open `[StartDate, EndDate)`, so on January 3 the incoming member holds the seat.
+- A mid-term party switch splits the term at the next party's start date; the roster writes the earlier party's end either as that date or as the day before. Segments that leave any other gap, overlap, or miss the term's start or end reject the whole legislator, as does a House term without a district; rejections are logged and written as one `CongressLegislators.Rejected` Errors row per run.
+- Overlapping terms (a chamber switch) are trimmed so the earlier term ends when the later one starts, and a term the roster ends the day before the next one starts is extended to meet it; a legislator's terms never overlap. A final mid-session end (a resignation or death) is stored as published, so that last date reads as out of office.
+- A current file with fewer than 500 records, or an empty historical file, aborts the run before any write. Otherwise one transaction upserts legislators, keeps the row of every term whose (BioGuide id, chamber, start) is unchanged, and deletes the listed legislators' terms the roster no longer has. Legislators are never deleted.
+- After the terms commit, [`CongressMemberIdentityService.ReconcileLegislatorIdentities`](../../src/Equibles.Congress.HostedService/Services/CongressMemberIdentityService.cs) runs the reviewed catalog reconciliation, then [`CongressMemberLegislatorMatcher`](../../src/Equibles.Congress.HostedService/Services/CongressMemberLegislatorMatcher.cs) derives a BioGuide id for each filing member that is not a catalog alias, under the same advisory lock as trade ingest.
+  - Filing dates are every distinct `CongressionalTrade.FilingDate` and `CongressionalAnnualDisclosure.FiledDate` of the member.
+  - A member whose `StateDistrict` parses matches Representative terms for that seat; a member whose position is Senator matches Senator terms. A term counts when it covers a filing date and the filed name ends with the legislator's surname, compared without accents, case, periods or apostrophes, hyphens read as spaces, and a trailing Jr, Sr, II, III, IV or V dropped from the filed name when two tokens remain.
+  - The id is assigned (`BioguideIdSource = SeatAndSurnameMatch`) only when exactly one legislator results across all dates, the member has no id, and no other member row has or derives the same id. An existing id is never changed; every refusal is logged and summed into one `CongressMembers.LegislatorIdentityConflict` Errors row per run, as a catalog merge candidate. Rows are never merged automatically.
+  - The catalog wins: catalog reconciliation replaces a conflicting matched id on an alias row, and a non-alias row holding a catalog id only by match gives it up without being merged or renamed; two catalog ids still abort it. A catalog id is never assigned by matching; a member whose seat and surname point at one is reported instead. The full conflict list is kept in the Errors row's stack trace, since its message is truncated.
 
 ## Cold-start patterns
 

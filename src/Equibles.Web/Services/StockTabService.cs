@@ -169,13 +169,20 @@ public class StockTabService
             selectedDate
         );
 
+        var filersWithPreviousQuarterFilings = await GetFilersWithPreviousQuarterFilings(
+            allCurrent,
+            allPrevious,
+            previousDate ?? selectedDate.AddDays(1).AddMonths(-3).AddDays(-1)
+        );
+
         var effectiveSplits = await LoadEffectiveSplits(stock);
         var grouped = HoldingsPositionGrouper.Group(
             allCurrent,
             allPrevious,
             filersWithCurrentQuarterFilings,
             effectiveSplits,
-            stock.Presentation.Listing.Ticker
+            stock.Presentation.Listing.Ticker,
+            filersWithPreviousQuarterFilings
         );
 
         var allChanges = grouped.SelectMany(g => g.Value).ToList();
@@ -213,8 +220,16 @@ public class StockTabService
             TotalBuyerCount = HoldingsTopMoversSelector.CountBuyers(grouped),
             TotalSellerCount = HoldingsTopMoversSelector.CountSellers(grouped),
             IsCombinedAvailable = isCombinedAvailable,
+            HolderTypes = await LoadHolderTypes(allChanges),
         };
     }
+
+    private Task<Dictionary<Guid, HolderEntityType>> LoadHolderTypes(
+        IEnumerable<HolderPositionChange> changes
+    ) =>
+        _institutionalHolderRepository.GetEntityTypes(
+            changes.Select(change => change.InstitutionalHolderId).Distinct().ToList()
+        );
 
     public async Task<HoldingsTabViewModel> LoadHoldingsCombinedTab(EquityIssuer stock)
     {
@@ -282,6 +297,7 @@ public class StockTabService
             [PositionChangeType.Increased] = [],
             [PositionChangeType.Reduced] = [],
             [PositionChangeType.SoldOut] = [],
+            [PositionChangeType.NoPriorFiling] = [],
         };
 
         return new HoldingsTabViewModel
@@ -304,6 +320,7 @@ public class StockTabService
             BucketCounts = grouped.ToDictionary(g => g.Key, g => g.Value.Count),
             IsCombinedView = true,
             IsCombinedAvailable = true,
+            HolderTypes = await LoadHolderTypes(holders),
         };
     }
 
@@ -851,10 +868,7 @@ public class StockTabService
 
         return statementLines
             .Where(line =>
-                line.Concepts.Any(r =>
-                    conceptIdByKey.TryGetValue((r.Taxonomy, r.Tag), out var id)
-                    && everReportedConceptIds.Contains(id)
-                )
+                StatementLineFacts.IsEverReported(line, conceptIdByKey, everReportedConceptIds)
             )
             .Select(line =>
             {
@@ -982,6 +996,7 @@ public class StockTabService
         {
             Stock = stock,
             Holder = holder,
+            HolderType = await _institutionalHolderRepository.GetEntityType(holder),
             Holdings = holdings,
         };
     }
@@ -1075,13 +1090,33 @@ public class StockTabService
 
         return (
             await _institutionalHoldingRepository
-                .GetAll()
-                .Where(h =>
-                    h.ReportDate == selectedDate
-                    && previousOnlyHolderIds.Contains(h.InstitutionalHolderId)
-                )
-                .Select(h => h.InstitutionalHolderId)
-                .Distinct()
+                .GetFiledHolderIdsAmong(selectedDate, previousOnlyHolderIds)
+                .ToListAsync()
+        ).ToHashSet();
+    }
+
+    // Current holders without a prior row for this stock that filed a 13F for the prior quarter:
+    // only their missing prior position proves an entry. A stock's first quarter compares against
+    // the calendar quarter before it.
+    private async Task<HashSet<Guid>> GetFilersWithPreviousQuarterFilings(
+        List<InstitutionalHolding> allCurrent,
+        List<InstitutionalHolding> allPrevious,
+        DateOnly previousDate
+    )
+    {
+        var previousHolderIds = allPrevious.Select(h => h.InstitutionalHolderId).ToHashSet();
+        var currentOnlyHolderIds = allCurrent
+            .Select(h => h.InstitutionalHolderId)
+            .Where(id => !previousHolderIds.Contains(id))
+            .Distinct()
+            .ToList();
+
+        if (currentOnlyHolderIds.Count == 0)
+            return [];
+
+        return (
+            await _institutionalHoldingRepository
+                .GetFiledHolderIdsAmong(previousDate, currentOnlyHolderIds)
                 .ToListAsync()
         ).ToHashSet();
     }

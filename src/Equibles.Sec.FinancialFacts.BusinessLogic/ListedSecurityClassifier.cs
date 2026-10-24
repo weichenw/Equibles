@@ -13,11 +13,12 @@ namespace Equibles.Sec.FinancialFacts.BusinessLogic;
 /// <para>
 /// Three ordered rules, each matching whole words only:
 /// <list type="number">
-/// <item>Rider clauses are stripped first — parenthetical segments and
-/// trailing "associated …" language ("Common Stock (and associated Preferred
-/// Share Purchase Rights)") describe a poison-pill rider attached to the
-/// security, not the security itself; classifying them would exclude genuine
-/// common stock.</item>
+/// <item>Rider clauses are stripped first — parenthetical segments, trailing
+/// "associated …" language ("Common Stock (and associated Preferred Share
+/// Purchase Rights)") and a trailing "including … rights" clause ("Common
+/// Stock, $0.01 par value including the Preferred Stock Purchase Rights")
+/// describe a poison-pill rider attached to the security, not the security
+/// itself; classifying them would exclude genuine common stock.</item>
 /// <item>A "purchase warrants/rights/units" phrase names the security by its
 /// trailing head noun ("Common Stock Purchase Warrants" is a listed warrant),
 /// so that wrapper wins. The phrase requires the wrapper immediately after
@@ -48,7 +49,8 @@ public static class ListedSecurityClassifier
         (Pattern("rights?"), ListedSecurityType.Rights),
         (Pattern("units?"), ListedSecurityType.Units),
         (Pattern("preferred|preference"), ListedSecurityType.PreferredShares),
-        (Pattern("notes?|debentures?|bonds?"), ListedSecurityType.DebtSecurities),
+        // "ETN" is the exchange-traded note's own abbreviation, which issuers file as the title's head noun.
+        (Pattern("notes?|debentures?|bonds?|etns?"), ListedSecurityType.DebtSecurities),
         (
             Pattern(
                 "common (stock|shares?)|ordinary shares?|american depositary (shares?|receipts?)|shares? of beneficial interest"
@@ -66,6 +68,12 @@ public static class ListedSecurityClassifier
     );
     private static readonly Regex AssociatedTail = new(
         @"[,;]?\s+(and\s+|together\s+with\s+)?(the\s+)?associated\b.*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled
+    );
+
+    // "…, including the Preferred Stock Purchase Rights": the rights ride on the security named before it.
+    private static readonly Regex IncludedRightsTail = new(
+        @"[,;]?\s*\bincluding\b.*\brights?\b.*$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled
     );
 
@@ -126,7 +134,10 @@ public static class ListedSecurityClassifier
         if (string.IsNullOrWhiteSpace(securityTitle))
             return ListedSecurityType.Unknown;
 
-        var title = AssociatedTail.Replace(Parenthetical.Replace(securityTitle, " "), " ");
+        var title = IncludedRightsTail.Replace(
+            AssociatedTail.Replace(Parenthetical.Replace(securityTitle, " "), " "),
+            " "
+        );
         if (string.IsNullOrWhiteSpace(title))
             return ListedSecurityType.Other;
 
