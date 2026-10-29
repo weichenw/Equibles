@@ -4,10 +4,10 @@ using Equibles.Core.AutoWiring;
 using Equibles.Integrations.XbrlFilings;
 using Equibles.Sec.HostedService.Contracts;
 using Equibles.Sec.HostedService.Services;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Configuration;
 
 namespace Equibles.Sec.HostedService.Extensions;
 
