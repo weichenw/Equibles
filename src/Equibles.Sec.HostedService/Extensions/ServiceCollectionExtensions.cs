@@ -81,7 +81,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IHostedService>(sp =>
             sp.GetRequiredService<IConfiguration>().GetValue("Sec:HostedServicesEnabled", true)
                 ? sp.GetRequiredService<THostedService>()
-                : new DisabledHostedService());
+                : new DisabledHostedService()
+        );
     }
 
     private sealed class DisabledHostedService : IHostedService
