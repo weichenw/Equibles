@@ -61,19 +61,33 @@ public static class ServiceCollectionExtensions
         // sub-scrapers: AsFiledHtml backfill, FilingItems backfill, document
         // normalization backfill, Xbrl document-set recapture, NPORT
         // reprocess/realtime, Form ADV, FundSeries refresh.
-        // Drain-only mode: on memory-constrained co-tenanted hosts the backfill
-        // workers must run without the SEC scrapers' burst load. The flag opts out
-        // at registration time (services are registered unconditionally otherwise);
-        // default true preserves current behaviour for everyone else.
-        if (services.GetConfiguration().GetValue("Sec:HostedServicesEnabled", true))
-        {
-            services.AddHostedService<SecScraperWorker>();
-            services.AddHostedService<DocumentProcessorWorker>();
-            services.AddHostedService<FtdScraperWorker>();
-            services.AddHostedService<InsiderFilingReprocessWorker>();
-            services.AddHostedService<Form144FilerCikBackfillWorker>();
-        }
+        // Drain-only mode: memory-constrained co-tenanted hosts run the file
+        // backfill drain without the SEC scrapers' burst load. The flag resolves
+        // inside the factory (registration happens before the host wires
+        // configuration as a service); default true preserves existing behaviour.
+        AddHostedServiceIfEnabled<SecScraperWorker>(services);
+        AddHostedServiceIfEnabled<DocumentProcessorWorker>(services);
+        AddHostedServiceIfEnabled<FtdScraperWorker>(services);
+        AddHostedServiceIfEnabled<InsiderFilingReprocessWorker>(services);
+        AddHostedServiceIfEnabled<Form144FilerCikBackfillWorker>(services);
 
         return services;
+    }
+
+    private static void AddHostedServiceIfEnabled<THostedService>(IServiceCollection services)
+        where THostedService : class, IHostedService
+    {
+        services.TryAddSingleton<THostedService>();
+        services.AddSingleton<IHostedService>(sp =>
+            sp.GetRequiredService<IConfiguration>()
+                .GetValue("Sec:HostedServicesEnabled", true)
+                ? sp.GetRequiredService<THostedService>()
+                : new DisabledHostedService());
+    }
+
+    private sealed class DisabledHostedService : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }
