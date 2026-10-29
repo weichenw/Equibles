@@ -19,6 +19,36 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  publish-images:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Login to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961f1180ffd26f5ede04  # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build worker
+        run: docker build -f src/Equibles.Worker.Host/Dockerfile -t ghcr.io/weichenw/equibles-worker:${{ github.sha }} -t ghcr.io/weichenw/equibles-worker:latest .
+      - name: Build web
+        run: docker build -f src/Equibles.Web/Dockerfile -t ghcr.io/weichenw/equibles-web:${{ github.sha }} -t ghcr.io/weichenw/equibles-web:latest .
+      - name: Build mcp
+        run: docker build -f src/Equibles.Mcp.Server/Dockerfile -t ghcr.io/weichenw/equibles-mcp:${{ github.sha }} -t ghcr.io/weichenw/equibles-mcp:latest .
+
+      - name: Push images
+        run: |
+          for image in worker web mcp; do
+            docker push "ghcr.io/weichenw/equibles-$image:${{ github.sha }}"
+            docker push "ghcr.io/weichenw/equibles-$image:latest"
+          done
+
   lint:
     runs-on: ubuntu-latest
 
