@@ -186,6 +186,7 @@ builder.Services.AddSecWorker();
 // BlobDeletionSweepWorker. Required for FileStorage__Enabled to do anything.
 builder.Services.AddMediaWorker();
 builder.Services.AddSecFinancialFactsWorker();
+
 // Holdings reconciliation services only (no hosted scrapers): registers
 // HoldingsImportService and HoldingsRescanSignal, which the auto-discovered
 // StockCusipChangedConsumer needs. The 13F/13D scrapers themselves stay
