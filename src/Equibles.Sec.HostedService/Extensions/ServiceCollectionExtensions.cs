@@ -6,6 +6,8 @@ using Equibles.Sec.HostedService.Contracts;
 using Equibles.Sec.HostedService.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Configuration;
 
 namespace Equibles.Sec.HostedService.Extensions;
 
@@ -59,11 +61,18 @@ public static class ServiceCollectionExtensions
         // sub-scrapers: AsFiledHtml backfill, FilingItems backfill, document
         // normalization backfill, Xbrl document-set recapture, NPORT
         // reprocess/realtime, Form ADV, FundSeries refresh.
-        services.AddHostedService<SecScraperWorker>();
-        services.AddHostedService<DocumentProcessorWorker>();
-        services.AddHostedService<FtdScraperWorker>();
-        services.AddHostedService<InsiderFilingReprocessWorker>();
-        services.AddHostedService<Form144FilerCikBackfillWorker>();
+        // Drain-only mode: on memory-constrained co-tenanted hosts the backfill
+        // workers must run without the SEC scrapers' burst load. The flag opts out
+        // at registration time (services are registered unconditionally otherwise);
+        // default true preserves current behaviour for everyone else.
+        if (services.GetConfiguration().GetValue("Sec:HostedServicesEnabled", true))
+        {
+            services.AddHostedService<SecScraperWorker>();
+            services.AddHostedService<DocumentProcessorWorker>();
+            services.AddHostedService<FtdScraperWorker>();
+            services.AddHostedService<InsiderFilingReprocessWorker>();
+            services.AddHostedService<Form144FilerCikBackfillWorker>();
+        }
 
         return services;
     }
