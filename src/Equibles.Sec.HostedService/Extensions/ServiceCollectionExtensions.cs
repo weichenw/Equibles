@@ -88,6 +88,7 @@ public static class ServiceCollectionExtensions
     private sealed class DisabledHostedService : IHostedService
     {
         public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
         public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

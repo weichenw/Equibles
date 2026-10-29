@@ -180,6 +180,7 @@ builder.Services.AutoWireServicesFrom<Equibles.InsiderTrading.BusinessLogic.Insi
 // AddSecFinancialFactsWorker, which no longer starts any hosted scraper.
 // Re-add hosted scrapers from git history if needed.
 builder.Services.AddWorkerServices();
+
 // Scraper families behind a master switch: memory-constrained or co-tenanted
 // hosts run the media drain only (ScraperWorkersEnabled=false) — suspension
 // covers every hosted scraper (SEC backlog, congress disclosures requiring
