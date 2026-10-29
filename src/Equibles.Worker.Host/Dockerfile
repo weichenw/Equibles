@@ -8,12 +8,18 @@ COPY src/ src/
 RUN dotnet restore src/Equibles.Worker.Host/Equibles.Worker.Host.csproj
 RUN dotnet publish src/Equibles.Worker.Host/Equibles.Worker.Host.csproj -c Release -o /app/publish --no-restore
 
-# Install Playwright Firefox browser binary (used by Senate disclosure scraper to bypass Akamai)
+# Install Playwright Firefox browser binary (used by Senate disclosure scraper to bypass Akamai).
+# Skipped on non-amd64: Playwright publishes no Firefox for linux-arm64, and the
+# install would either fail or place an x86 binary unusable in an arm64 image.
+# Scraper-family workers (ScraperWorkersEnabled=false for drain-only runs) never
+# launch the browser, so its absence is safe there.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN dotnet exec \
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+    dotnet exec \
     --runtimeconfig /app/publish/Equibles.Worker.Host.runtimeconfig.json \
     --depsfile /app/publish/Equibles.Worker.Host.deps.json \
-    /app/publish/Microsoft.Playwright.dll install firefox
+    /app/publish/Microsoft.Playwright.dll install firefox \
+    ; else mkdir -p /ms-playwright; fi
 
 FROM base AS final
 # Install runtime dependencies: Kerberos + Playwright Firefox system libraries.

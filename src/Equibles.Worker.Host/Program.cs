@@ -180,11 +180,12 @@ builder.Services.AutoWireServicesFrom<Equibles.InsiderTrading.BusinessLogic.Insi
 // AddSecFinancialFactsWorker, which no longer starts any hosted scraper.
 // Re-add hosted scrapers from git history if needed.
 builder.Services.AddWorkerServices();
-builder.Services.AddSecWorker();
-
-// Starts FileBackfillWorker (drains DB blobs to the filesystem store) and
-// BlobDeletionSweepWorker. Required for FileStorage__Enabled to do anything.
-builder.Services.AddMediaWorker();
+// Scraper families behind a master switch: memory-constrained or co-tenanted
+// hosts run the media drain only (ScraperWorkersEnabled=false) — suspension
+// covers every hosted scraper (SEC backlog, congress disclosures requiring
+// Playwright Firefox, finra/yahoo/cboe/cftc/fred imports and delayed trades).
+// Default true preserves upstream behaviour.
+var scraperWorkersEnabled = builder.Configuration.GetValue("ScraperWorkersEnabled", true);
 builder.Services.AddSecFinancialFactsWorker();
 
 // Holdings reconciliation services only (no hosted scrapers): registers
@@ -192,15 +193,23 @@ builder.Services.AddSecFinancialFactsWorker();
 // StockCusipChangedConsumer needs. The 13F/13D scrapers themselves stay
 // disabled — the rescan signal fires harmlessly into no listener.
 builder.Services.AddHoldingsReconciliation();
-builder.Services.AddFinraWorker();
-builder.Services.AddFredWorker();
-builder.Services.AddYahooWorker();
-builder.Services.AddCftcWorker();
-builder.Services.AddCboeWorker();
-builder.Services.AddCongressWorker();
-builder.Services.AddCommonStocksWorker();
-builder.Services.AddEquityMarketsWorker();
-builder.Services.AddDelayedTradesWorker();
+if (scraperWorkersEnabled)
+{
+    builder.Services.AddSecWorker();
+    builder.Services.AddFinraWorker();
+    builder.Services.AddFredWorker();
+    builder.Services.AddYahooWorker();
+    builder.Services.AddCftcWorker();
+    builder.Services.AddCboeWorker();
+    builder.Services.AddCongressWorker();
+    builder.Services.AddCommonStocksWorker();
+    builder.Services.AddEquityMarketsWorker();
+    builder.Services.AddDelayedTradesWorker();
+}
+
+// Starts FileBackfillWorker (drains DB blobs to the filesystem store) and
+// BlobDeletionSweepWorker. Required for FileStorage__Enabled to do anything.
+builder.Services.AddMediaWorker();
 
 var host = builder.Build();
 host.Run();
